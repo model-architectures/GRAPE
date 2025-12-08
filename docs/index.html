@@ -174,7 +174,7 @@
         </h2>
         
         <div class="authors-list">
-           Yifan Zhang, Zixiang Chen, Yifeng Liu, Zhen Qin, Huizhuo Yuan, <br>
+           <a href="https://yifzhang.com" target="_blank" rel="noopener" style="color: inherit;">Yifan Zhang</a>, Zixiang Chen, Yifeng Liu, Zhen Qin, Huizhuo Yuan, <br>
            Kangping Xu, Yang Yuan, Quanquan Gu, Andrew Chi-Chih Yao
         </div>
         <div class="affiliations">
@@ -204,13 +204,13 @@
         <h2 class="title is-3 has-text-centered section-title">Abstract</h2>
         <div class="content has-text-justified" style="max-width:880px;">
           <p>
-             We present <strong>GRAPE</strong> (Group Representational Position Encoding), a unified framework for positional encoding based on group actions. GRAPE brings together two families of mechanisms: (i) <strong>multiplicative rotations</strong> (Multiplicative GRAPE) in $SO(d)$ and (ii) <strong>additive logit biases</strong> (Additive GRAPE) arising from unipotent actions in the general linear group $GL$.
+              We present <strong>GRAPE</strong> (Group Representational Position Encoding), a unified framework for positional encoding based on group actions. GRAPE brings together two families of mechanisms: (i) <strong>multiplicative rotations</strong> (Multiplicative GRAPE) in $SO(d)$ and (ii) <strong>additive logit biases</strong> (Additive GRAPE) arising from unipotent actions in the general linear group $GL$.
           </p>
           <p>
-             In Multiplicative GRAPE, a position $n \in \mathbb{Z}$ acts as $G(n) = \exp(n\omega L)$ with a rank-2 skew generator $L$, yielding a relative, compositional, norm-preserving map with a closed-form matrix exponential. <strong>RoPE</strong> is recovered exactly when the planes are canonical coordinate pairs.
+              In Multiplicative GRAPE, a position $n \in \mathbb{Z}$ acts as $G(n) = \exp(n\omega L)$ with a rank-2 skew generator $L$, yielding a relative, compositional, norm-preserving map with a closed-form matrix exponential. <strong>RoPE</strong> is recovered exactly when the planes are canonical coordinate pairs.
           </p>
           <p>
-             In Additive GRAPE, additive logits arise as rank-1 unipotent actions in a lifted homogeneous space, recovering <strong>ALiBi</strong> and the <strong>Forgetting Transformer (FoX)</strong> as exact special cases while preserving an exact relative law. Altogether, GRAPE supplies a principled design space for positional geometry in long-context models.
+              In Additive GRAPE, additive logits arise as rank-1 unipotent actions in a lifted homogeneous space, recovering <strong>ALiBi</strong> and the <strong>Forgetting Transformer (FoX)</strong> as exact special cases while preserving an exact relative law. Altogether, GRAPE supplies a principled design space for positional geometry in long-context models.
           </p>
           <p class="has-text-centered" style="margin-top:1.25rem;">
             <a class="button is-link is-light" href="https://github.com/model-architectures/GRAPE" target="_blank" rel="noopener">
@@ -229,7 +229,7 @@
         <h2 class="title is-3 has-text-centered section-title">The Unified Framework</h2>
         <div class="content">
           <p>
-             GRAPE unifies positional encodings via the <strong>General Relative Law</strong> of one-parameter subgroups:
+              GRAPE unifies positional encodings via the <strong>General Relative Law</strong> of one-parameter subgroups:
             $$G(t-s) = G(s)^{-1}G(t).$$
              Whether the action is a rotation in $SO(d)$ or a translation in a lifted $GL(d+k)$, this algebraic property ensures that attention scores depend solely on the relative offset $t-s$.
           </p>
@@ -286,13 +286,13 @@ exp(L) = I + (sin(s)/s) * L + ((1 - cos(s))/s^2) * L^2</code></pre>
 
           <h4 class="title is-5 tight">Recovery of RoPE</h4>
           <p>
-             RoPE is recovered exactly when $d/2$ commuting rank-2 generators act on disjoint canonical coordinate planes with a log-uniform spectrum.
+              RoPE is recovered exactly when $d/2$ commuting rank-2 generators act on disjoint canonical coordinate planes with a log-uniform spectrum.
           </p>
           <p class="has-text-centered">
             $$L_{\text{RoPE}} = \sum_{i=1}^{d/2} \theta_i L(e_{2i-1}, e_{2i})$$
           </p>
           <p>
-             GRAPE extends this geometry to <strong>learned commuting subspaces</strong> and compact <strong>non-commuting mixtures</strong> that capture cross-subspace feature coupling at negligible cost.
+              GRAPE extends this geometry to <strong>learned commuting subspaces</strong> and compact <strong>non-commuting mixtures</strong> that capture cross-subspace feature coupling at negligible cost.
           </p>
         </div>
       </div>
@@ -316,14 +316,14 @@ G_add(n) = [ I_d   n w u ]
 
           <h4 class="title is-5 tight">Exact Relative Law via Inverse Transpose</h4>
           <p>
-             In the general linear group, the transpose is not the inverse. To preserve relativity, keys are transformed via the inverse transpose:
+              In the general linear group, the transpose is not the inverse. To preserve relativity, keys are transformed via the inverse transpose:
           </p>
           <p class="has-text-centered">
             $$\tilde{q}_i = G_{\text{add}}(i)\hat{q}_i, \quad \tilde{k}_j = G_{\text{add}}(j)^{-\top}\hat{k}_j$$
             $$\implies \tilde{q}_i^\top \tilde{k}_j = q_i^\top k_j + \text{bias}(j-i)$$
           </p>
           <p>
-             This formulation recovers <strong>ALiBi</strong> exactly when using a rank-1 nilpotent in $\mathbb{R}^{d+2}$. It also proves that the <strong>Forgetting Transformer (FoX)</strong> is an exact instance of Additive GRAPE with content-gated decay.
+              This formulation recovers <strong>ALiBi</strong> exactly when using a rank-1 nilpotent in $\mathbb{R}^{d+2}$. It also proves that the <strong>Forgetting Transformer (FoX)</strong> is an exact instance of Additive GRAPE with content-gated decay.
           </p>
         </div>
       </div>
