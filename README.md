@@ -43,7 +43,7 @@ $$\tilde{q}_i^\top \tilde{k}_j = q_i^\top k_j + \text{bias}(j-i)$$
 ```bash
 conda create -n grape python=3.12
 conda activate grape
-pip install torch==2.4.0 numpy transformers
+pip install torch==2.4.0 numpy transformers datasets tiktoken wandb tqdm
 ````
 
 ## 💻 Usage
