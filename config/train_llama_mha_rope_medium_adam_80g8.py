@@ -45,4 +45,4 @@ schedule = 'cosine'
 
 # System configs
 compile = True
-model_type = 'llama-mha'
+model_type = 'llama-mha-rope'
