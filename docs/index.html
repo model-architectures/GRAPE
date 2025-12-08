@@ -9,13 +9,13 @@
   <meta name="keywords" content="GRAPE, Position Encoding, RoPE, ALiBi, Transformers, Group Theory, Lie Groups, SO(d), GL(d), Long Context">
   <meta name="citation_title" content="Group Representational Position Encoding">
   <meta name="citation_author" content="Yifan Zhang">
-  <meta name="citation_author" content="Kangping Xu">
   <meta name="citation_author" content="Zixiang Chen">
   <meta name="citation_author" content="Yifeng Liu">
   <meta name="citation_author" content="Zhen Qin">
   <meta name="citation_author" content="Huizhuo Yuan">
-  <meta name="citation_author" content="Quanquan Gu">
+  <meta name="citation_author" content="Kangping Xu">
   <meta name="citation_author" content="Yang Yuan">
+  <meta name="citation_author" content="Quanquan Gu">
   <meta name="citation_author" content="Andrew Chi-Chih Yao">
   <meta name="citation_publication_date" content="2025/12/08">
   <meta name="citation_pdf_url" content="GRAPE.pdf">
@@ -24,7 +24,7 @@
   <meta property="og:type" content="website"/>
   <meta property="og:url" content="https://github.com/model-architectures/GRAPE"/>
   <link rel="canonical" href="https://github.com/model-architectures/GRAPE">
-  <link rel="icon" href="https://placehold.co/32x32/4A154B/FFFFFF?text=G" type="image/x-icon">
+  <link rel="icon" href="https://placehold.co/32x32/0A2540/FFFFFF?text=G" type="image/x-icon">
 
   <link rel="preconnect" href="https://fonts.googleapis.com" />
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
@@ -50,16 +50,16 @@
 
   <style>
     :root{
-      --primary-color:#4A154B;    /* Deep Grape/Purple */
-      --accent-color:#FF8C00;     /* Complementary Orange/Gold */
+      --primary-color:#0A2540;    /* PLI Blue / Deep Navy */
+      --accent-color:#00C2FF;     /* Cyan Accent */
       --main-bg:#FFFFFF;
-      --content-bg:#F8F7FA;
+      --content-bg:#F6F8FA;
       --text-main:#2D2D2D;
       --text-on-primary:#FFFFFF;
       --link-color:var(--primary-color);
-      --link-hover-color:#2a0a2b;
-      --primary-color-rgb:74,21,75;
-      --link-color-rgb:74,21,75;
+      --link-hover-color:#143E73;
+      --primary-color-rgb:10,37,64;
+      --link-color-rgb:10,37,64;
       --border-color:#e5e7eb;
       --shadow-color:rgba(0,0,0,0.1);
     }
@@ -74,7 +74,7 @@
 
     /* Navbar */
     .navbar{
-      background:rgba(var(--primary-color-rgb),0.95);
+      background:rgba(var(--primary-color-rgb),0.92);
       backdrop-filter:blur(10px);
       box-shadow:0 2px 5px var(--shadow-color);
       position:sticky; top:0; z-index:100;
@@ -84,7 +84,7 @@
     .navbar-burger{ color:var(--text-on-primary); }
 
     /* Hero */
-    .hero{ background:linear-gradient(135deg, #4A154B 0%, #2a0a2b 100%); color:var(--text-on-primary); }
+    .hero{ background:linear-gradient(180deg, #0A2540 0%, #0e3055 100%); color:var(--text-on-primary); }
     .hero .title{
       font-family:'Space Grotesk', sans-serif; font-weight:700; color:var(--text-on-primary);
       font-size:3.0rem; line-height:1.1;
@@ -122,8 +122,8 @@
     code{ background:#f2f4f7; color:#1f2937; padding:0.18em 0.38em; border-radius:4px; font-size:85%; }
     pre code{ background:transparent; color:inherit; padding:0; font-size:inherit; }
 
-    /* Badges / pills */
-    .pill{ display:inline-block; padding:.35rem .6rem; border-radius:999px; font-size:.82rem; background:rgba(255,255,255,0.1); color:#fff; margin:.15rem .25rem; border:1px solid rgba(255,255,255,0.2); backdrop-filter:blur(4px); }
+    /* Badges / pills - PLI Style */
+    .pill{ display:inline-block; padding:.35rem .6rem; border-radius:999px; font-size:.82rem; background:#E6F7FF; color:#0A2540; margin:.15rem .25rem; border:1px solid #C8ECFF; }
 
     /* Footer */
     .footer{
@@ -138,28 +138,6 @@
     .tight{ margin-top:0.5rem; margin-bottom:0.75rem; }
     .columns.is-vcentered { align-items: center; }
   </style>
-
-  <script type="application/ld+json">
-  {
-    "@context":"https://schema.org",
-    "@type":"ScholarlyArticle",
-    "name":"Group Representational Position Encoding",
-    "url":"https://github.com/model-architectures/GRAPE",
-    "datePublished":"2025-12-08",
-    "author":[
-        {"@type":"Person","name":"Yifan Zhang"},
-        {"@type":"Person","name":"Kangping Xu"},
-        {"@type":"Person","name":"Zixiang Chen"},
-        {"@type":"Person","name":"Yifeng Liu"},
-        {"@type":"Person","name":"Zhen Qin"},
-        {"@type":"Person","name":"Huizhuo Yuan"},
-        {"@type":"Person","name":"Quanquan Gu"},
-        {"@type":"Person","name":"Yang Yuan"},
-        {"@type":"Person","name":"Andrew Chi-Chih Yao"}
-    ],
-    "description":"A unified framework for positional encoding based on group actions, subsuming RoPE and ALiBi."
-  }
-  </script>
 </head>
 <body>
 
@@ -196,11 +174,11 @@
         </h2>
         
         <div class="authors-list">
-           Yifan Zhang, Kangping Xu, Zixiang Chen, Yifeng Liu, Zhen Qin,<br>
-           Huizhuo Yuan, Quanquan Gu, Yang Yuan, Andrew Chi-Chih Yao
+           Yifan Zhang, Zixiang Chen, Yifeng Liu, Zhen Qin,<br>
+           Huizhuo Yuan, Kangping Xu, Yang Yuan, Quanquan Gu, Andrew Chi-Chih Yao
         </div>
         <div class="affiliations">
-          Princeton University &nbsp;&bull;&nbsp; UCLA &nbsp;&bull;&nbsp; IIIS, Tsinghua University
+          Princeton University &nbsp;&bull;&nbsp; IIIS, Tsinghua University &nbsp;&bull;&nbsp; UCLA
         </div>
 
         <div class="project-links" style="margin-top:1.5rem;">
@@ -226,13 +204,13 @@
         <h2 class="title is-3 has-text-centered section-title">Abstract</h2>
         <div class="content has-text-justified" style="max-width:880px;">
           <p>
-            We present <strong>GRAPE</strong> (Group Representational Position Encoding), a unified framework for positional encoding based on group actions. GRAPE brings together two families of mechanisms: (i) <strong>multiplicative rotations</strong> (Multiplicative GRAPE) in $SO(d)$ and (ii) <strong>additive logit biases</strong> (Additive GRAPE) arising from unipotent actions in the general linear group $GL$.
+            [cite_start]We present <strong>GRAPE</strong> (Group Representational Position Encoding), a unified framework for positional encoding based on group actions[cite: 1, 13]. [cite_start]GRAPE brings together two families of mechanisms: (i) <strong>multiplicative rotations</strong> (Multiplicative GRAPE) in $SO(d)$ and (ii) <strong>additive logit biases</strong> (Additive GRAPE) arising from unipotent actions in the general linear group $GL$[cite: 14].
           </p>
           <p>
-            In Multiplicative GRAPE, a position $n \in \mathbb{Z}$ acts as $G(n) = \exp(n\omega L)$ with a rank-2 skew generator $L$, yielding a relative, compositional, norm-preserving map with a closed-form matrix exponential. <strong>RoPE</strong> is recovered exactly when the planes are canonical coordinate pairs.
+            [cite_start]In Multiplicative GRAPE, a position $n \in \mathbb{Z}$ acts as $G(n) = \exp(n\omega L)$ with a rank-2 skew generator $L$, yielding a relative, compositional, norm-preserving map with a closed-form matrix exponential[cite: 15]. [cite_start]<strong>RoPE</strong> is recovered exactly when the planes are canonical coordinate pairs[cite: 16].
           </p>
           <p>
-            In Additive GRAPE, additive logits arise as rank-1 unipotent actions in a lifted homogeneous space, recovering <strong>ALiBi</strong> and the <strong>Forgetting Transformer (FoX)</strong> as exact special cases while preserving an exact relative law. Altogether, GRAPE supplies a principled design space for positional geometry in long-context models.
+            [cite_start]In Additive GRAPE, additive logits arise as rank-1 unipotent actions in a lifted homogeneous space, recovering <strong>ALiBi</strong> and the <strong>Forgetting Transformer (FoX)</strong> as exact special cases while preserving an exact relative law[cite: 18]. [cite_start]Altogether, GRAPE supplies a principled design space for positional geometry in long-context models[cite: 19].
           </p>
           <p class="has-text-centered" style="margin-top:1.25rem;">
             <a class="button is-link is-light" href="https://github.com/model-architectures/GRAPE" target="_blank" rel="noopener">
@@ -251,35 +229,35 @@
         <h2 class="title is-3 has-text-centered section-title">The Unified Framework</h2>
         <div class="content">
           <p>
-            GRAPE unifies positional encodings via the <strong>General Relative Law</strong> of one-parameter subgroups:
+            [cite_start]GRAPE unifies positional encodings via the <strong>General Relative Law</strong> of one-parameter subgroups[cite: 31]:
             $$G(t-s) = G(s)^{-1}G(t).$$
-            Whether the action is a rotation in $SO(d)$ or a translation in a lifted $GL(d+k)$, this algebraic property ensures that attention scores depend solely on the relative offset $t-s$.
+            [cite_start]Whether the action is a rotation in $SO(d)$ or a translation in a lifted $GL(d+k)$, this algebraic property ensures that attention scores depend solely on the relative offset $t-s$[cite: 111, 114].
           </p>
           <div class="columns is-vcentered" style="margin-top:2rem;">
             <div class="column is-6">
                 <div class="box has-text-centered" style="height:100%;">
                     <h4 class="title is-5" style="color:var(--primary-color);">Multiplicative GRAPE</h4>
-                    <p class="tight"><strong>Operation:</strong> Rotation ($SO(d)$)</p>
-                    <p class="tight"><strong>Generator:</strong> $L$ (Rank-2 Skew)</p>
+                    [cite_start]<p class="tight"><strong>Operation:</strong> Rotation ($SO(d)$) [cite: 34]</p>
+                    [cite_start]<p class="tight"><strong>Generator:</strong> $L$ (Rank-2 Skew) [cite: 36]</p>
                     <hr>
                     <p>
                         $$G(n) = \exp(n \cdot \omega \cdot L)$$
                         $$L = \mathbf{ab}^\top - \mathbf{ba}^\top$$
                     </p>
-                    <p class="is-size-7 mt-3">Recovers <strong>RoPE</strong>, Learned Basis, Non-commuting.</p>
+                    [cite_start]<p class="is-size-7 mt-3">Recovers <strong>RoPE</strong>, Learned Basis, Non-commuting[cite: 50, 51].</p>
                 </div>
             </div>
             <div class="column is-6">
                 <div class="box has-text-centered" style="height:100%;">
-                    <h4 class="title is-5" style="color:var(--accent-color);">Additive GRAPE</h4>
-                    <p class="tight"><strong>Operation:</strong> Translation ($GL(d+k)$)</p>
-                    <p class="tight"><strong>Generator:</strong> $A$ (Low-rank Nilpotent)</p>
+                    <h4 class="title is-5" style="color:#0085bd;">Additive GRAPE</h4>
+                    [cite_start]<p class="tight"><strong>Operation:</strong> Translation ($GL(d+k)$) [cite: 41]</p>
+                    [cite_start]<p class="tight"><strong>Generator:</strong> $A$ (Low-rank Nilpotent) [cite: 42]</p>
                     <hr>
                     <p>
                         $$G_{\text{add}}(n) = I + n \cdot \omega \cdot A$$
                         $$A^2 = 0 \implies \text{Unipotent}$$
                     </p>
-                    <p class="is-size-7 mt-3">Recovers <strong>ALiBi</strong>, <strong>FoX</strong>, Path Integrals.</p>
+                    [cite_start]<p class="is-size-7 mt-3">Recovers <strong>ALiBi</strong>, <strong>FoX</strong>, Path Integrals[cite: 51, 52].</p>
                 </div>
             </div>
           </div>
@@ -292,25 +270,25 @@
         <h2 class="title is-3 has-text-centered section-title">Multiplicative GRAPE: $SO(d)$</h2>
         <div class="content">
           <p>
-            We model positions as norm-preserving rotations generated by a rank-2 skew-symmetric matrix $L$. Unlike dense matrix exponentials ($\mathcal{O}(d^3)$), we derive a closed-form <strong>Rodrigues-type formula</strong> evaluable in $\mathcal{O}(d)$ time.
+            We model positions as norm-preserving rotations generated by a rank-2 skew-symmetric matrix $L$. [cite_start]Unlike dense matrix exponentials ($\mathcal{O}(d^3)$), we derive a closed-form <strong>Rodrigues-type formula</strong> evaluable in $\mathcal{O}(d)$ time[cite: 119].
           </p>
 
           <h4 class="title is-5 tight">Rank-2 Generator & Closed Form</h4>
-          <pre><code>// Generator L defined by vectors a, b
+          [cite_start]<pre><code>// Generator L defined by vectors a, b [cite: 97]
 L = a b^T - b a^T;    s = sqrt( ||a||^2 ||b||^2 - (a^T b)^2 )
 
-// Closed-form Matrix Exponential (Rodrigues)
+[cite_start]// Closed-form Matrix Exponential (Rodrigues) [cite: 120]
 exp(L) = I + (sin(s)/s) * L + ((1 - cos(s))/s^2) * L^2</code></pre>
 
           <h4 class="title is-5 tight">Recovery of RoPE</h4>
           <p>
-            RoPE is recovered exactly when $d/2$ commuting rank-2 generators act on disjoint canonical coordinate planes with a log-uniform spectrum.
+            [cite_start]RoPE is recovered exactly when $d/2$ commuting rank-2 generators act on disjoint canonical coordinate planes with a log-uniform spectrum[cite: 167].
           </p>
           <p class="has-text-centered">
             $$L_{\text{RoPE}} = \sum_{i=1}^{d/2} \theta_i L(e_{2i-1}, e_{2i})$$
           </p>
           <p>
-            GRAPE extends this geometry to <strong>learned commuting subspaces</strong> and compact <strong>non-commuting mixtures</strong> that capture cross-subspace feature coupling at negligible cost.
+            [cite_start]GRAPE extends this geometry to <strong>learned commuting subspaces</strong> and compact <strong>non-commuting mixtures</strong> that capture cross-subspace feature coupling at negligible cost[cite: 171].
           </p>
         </div>
       </div>
@@ -321,12 +299,12 @@ exp(L) = I + (sin(s)/s) * L + ((1 - cos(s))/s^2) * L^2</code></pre>
         <h2 class="title is-3 has-text-centered section-title">Additive GRAPE: Unipotent Lift in $GL$</h2>
         <div class="content">
           <p>
-            To produce additive biases (like ALiBi) within a group-theoretic framework, we employ a <strong>homogeneous lift</strong>. We augment the space to $\mathbb{R}^{d+k}$ and use a nilpotent generator $A$ (where $A^2=0$).
+            To produce additive biases (like ALiBi) within a group-theoretic framework, we employ a <strong>homogeneous lift</strong>. [cite_start]We augment the space to $\mathbb{R}^{d+k}$ and use a nilpotent generator $A$ (where $A^2=0$)[cite: 182].
           </p>
 
           <h4 class="title is-5 tight">The Unipotent Action</h4>
           <pre><code>// Generator A is strictly nilpotent (rank-1 or low-rank)
-A^2 = 0  ==>  exp(n w A) = I + n w A
+[cite_start]A^2 = 0  ==>  exp(n w A) = I + n w A [cite: 184]
 
 // Application via Homogeneous Coordinates
 G_add(n) = [ I_d   n w u ]
@@ -334,14 +312,14 @@ G_add(n) = [ I_d   n w u ]
 
           <h4 class="title is-5 tight">Exact Relative Law via Inverse Transpose</h4>
           <p>
-             In the general linear group, the transpose is not the inverse. To preserve relativity, keys are transformed via the inverse transpose:
+             In the general linear group, the transpose is not the inverse. [cite_start]To preserve relativity, keys are transformed via the inverse transpose[cite: 191]:
           </p>
           <p class="has-text-centered">
             $$\tilde{q}_i = G_{\text{add}}(i)\hat{q}_i, \quad \tilde{k}_j = G_{\text{add}}(j)^{-\top}\hat{k}_j$$
             $$\implies \tilde{q}_i^\top \tilde{k}_j = q_i^\top k_j + \text{bias}(j-i)$$
           </p>
           <p>
-            This formulation recovers <strong>ALiBi</strong> exactly when using a rank-1 nilpotent in $\mathbb{R}^{d+2}$. It also proves that the <strong>Forgetting Transformer (FoX)</strong> is an exact instance of Additive GRAPE with content-gated decay.
+            [cite_start]This formulation recovers <strong>ALiBi</strong> exactly when using a rank-1 nilpotent in $\mathbb{R}^{d+2}$[cite: 218]. [cite_start]It also proves that the <strong>Forgetting Transformer (FoX)</strong> is an exact instance of Additive GRAPE with content-gated decay[cite: 223].
           </p>
         </div>
       </div>
@@ -352,13 +330,13 @@ G_add(n) = [ I_d   n w u ]
         <h2 class="title is-3 has-text-centered section-title">Path Integrals & Contextual Forms</h2>
         <div class="content">
             <p>
-                GRAPE extends naturally to <strong>Path-Integral Additive GRAPE (GRAPE-AP)</strong>, where the scalar offset is replaced by a path sum of edge potentials $\psi_h(t, l)$. This allows for strictly causal, content-adaptive biases that retain the exact relative law structure.
+                GRAPE extends naturally to <strong>Path-Integral Additive GRAPE (GRAPE-AP)</strong>, where the scalar offset is replaced by a path sum of edge potentials $\psi_h(t, l)$. [cite_start]This allows for strictly causal, content-adaptive biases that retain the exact relative law structure[cite: 231].
             </p>
             <p class="has-text-centered">
                 $$b_h(t, j) := \sum_{l=j+1}^t \psi_h(t, l)$$
             </p>
             <p>
-                Combining Multiplicative and Additive GRAPE yields a powerful, unified encoding that supports both high-fidelity rotation (preservation of norm) and flexible additive biases (length extrapolation and forgetting) within a single efficient streaming implementation.
+                [cite_start]Combining Multiplicative and Additive GRAPE yields a powerful, unified encoding that supports both high-fidelity rotation (preservation of norm) and flexible additive biases (length extrapolation and forgetting) within a single efficient streaming implementation[cite: 230].
             </p>
         </div>
       </div>
