@@ -168,14 +168,14 @@
       <div class="container has-text-centered">
         <h1 class="title">GRAPE</h1>
         <h2 class="subtitle is-hero-subtitle">
-          <span class="highlight">Group Representational Position Encoding</span>
+          <span class="highlight" style="font-size: 2rem;">Group Representational Position Encoding</span>
           <br>
           A unified framework that subsumes RoPE and ALiBi via <span class="highlight">norm-preserving rotations</span> and <span class="highlight">unipotent lifts</span>, guaranteeing exact relativity and streaming cacheability.
         </h2>
         
         <div class="authors-list">
-           Yifan Zhang, Zixiang Chen, Yifeng Liu, Zhen Qin,<br>
-           Huizhuo Yuan, Kangping Xu, Yang Yuan, Quanquan Gu, Andrew Chi-Chih Yao
+           Yifan Zhang, Zixiang Chen, Yifeng Liu, Zhen Qin, Huizhuo Yuan, <br>
+           Kangping Xu, Yang Yuan, Quanquan Gu, Andrew Chi-Chih Yao
         </div>
         <div class="affiliations">
           Princeton University &nbsp;&bull;&nbsp; IIIS, Tsinghua University &nbsp;&bull;&nbsp; UCLA
@@ -233,6 +233,10 @@
             $$G(t-s) = G(s)^{-1}G(t).$$
              Whether the action is a rotation in $SO(d)$ or a translation in a lifted $GL(d+k)$, this algebraic property ensures that attention scores depend solely on the relative offset $t-s$.
           </p>
+
+          <img src="figure1.png" alt="Figure 1: GRAPE Framework Overview">
+          <span class="mini-caption">Figure 1: Visual overview of the GRAPE framework, contrasting rotational and unipotent actions.</span>
+
           <div class="columns is-vcentered" style="margin-top:2rem;">
             <div class="column is-6">
                 <div class="box has-text-centered" style="height:100%;">
