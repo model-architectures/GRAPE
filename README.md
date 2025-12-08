@@ -8,6 +8,10 @@ This repository contains the official implementation of the paper **"Group Repre
 
 GRAPE is a unified group-theoretic framework for positional encoding that subsumes multiplicative mechanisms (like RoPE) and additive mechanisms (like ALiBi and FoX) under a single mathematical formalism. By leveraging group actions, specifically rotations in $SO(d)$ and unipotent lifts in $GL(d+k)$, GRAPE guarantees exact relative position laws and efficient streaming cacheability.
 
+Authors: [Yifan Zhang](https://yifzhang.com), [Zixiang Chen](https://sites.google.com/view/zxchen/home), [Yifeng Liu](https://lauyikfung.github.io), [Zhen Qin](https://doraemonzzz.com), [Huizhuo Yuan](https://scholar.google.com/citations?user=8foZzX4AAAAJ), [Kangping Xu](), [Yang Yuan](https://scholar.google.com/citations?user=7o4wtKEAAAAJ&hl=en), [Quanquan Gu](https://web.cs.ucla.edu/~qgu/), [Andrew Chi-Chih Yao](https://en.wikipedia.org/wiki/Andrew_Yao)
+
+[[Webpage](https://tensorgi.github.io/TPA)] 
+
 ## 📖 Abstract
 
 Positional information is essential for sequence modeling with Transformers. We present **GRAPE**, a framework that unifies two families of mechanisms:
