@@ -11,7 +11,7 @@ GRAPE is a unified group-theoretic framework for positional encoding that subsum
 
 Authors: [Yifan Zhang](https://yifzhang.com), [Zixiang Chen](https://sites.google.com/view/zxchen/home), [Yifeng Liu](https://lauyikfung.github.io), [Zhen Qin](https://doraemonzzz.com), [Huizhuo Yuan](https://scholar.google.com/citations?user=8foZzX4AAAAJ), [Kangping Xu](), [Yang Yuan](https://scholar.google.com/citations?user=7o4wtKEAAAAJ&hl=en), [Quanquan Gu](https://web.cs.ucla.edu/~qgu/), [Andrew Chi-Chih Yao](https://en.wikipedia.org/wiki/Andrew_Yao) 
 
-[[Webpage](https://tensorgi.github.io/TPA)] 
+[[Webpage](https://github.com/model-architectures/GRAPE)] [[Huggingface](https://huggingface.co/papers/2512.07805)] 
 
 ## 📖 Abstract
 
