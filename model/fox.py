@@ -111,42 +111,42 @@ def maybe_contiguous(x):
     # so inner-dimension contiguity is enforced.
     return x.contiguous() if x.stride(-1) != 1 else x
 
+from .layernorm import RMSNorm
+# class RMSNorm(nn.Module):
+#     def __init__(self, dim: int, eps: float = 1e-5, elementwise_affine: bool = True, use_fp32: bool = True):
+#         super().__init__()
+#         self.dim = dim
+#         self.eps = eps
+#         self.elementwise_affine = elementwise_affine
+#         self.use_fp32 = use_fp32
+#         if self.elementwise_affine:
+#             self.weight = nn.Parameter(torch.ones(dim))
+#         else:
+#             self.register_parameter('weight', None)
 
-class RMSNorm(nn.Module):
-    def __init__(self, dim: int, eps: float = 1e-5, elementwise_affine: bool = True, use_fp32: bool = True):
-        super().__init__()
-        self.dim = dim
-        self.eps = eps
-        self.elementwise_affine = elementwise_affine
-        self.use_fp32 = use_fp32
-        if self.elementwise_affine:
-            self.weight = nn.Parameter(torch.ones(dim))
-        else:
-            self.register_parameter('weight', None)
+#     def _norm(self, x):
+#         return x * torch.rsqrt(x.pow(2).mean(-1, keepdim=True) + self.eps)
 
-    def _norm(self, x):
-        return x * torch.rsqrt(x.pow(2).mean(-1, keepdim=True) + self.eps)
+#     def forward(self, x, residual: Optional[torch.Tensor] = None, prenorm: bool = False, residual_in_fp32: bool = False):
+#         if self.use_fp32:
+#             y = self._norm(x.float())
+#         else:
+#             y = self._norm(x)
+#         if self.weight is not None:
+#             if self.use_fp32:
+#                 y = y * self.weight.float()
+#             else:
+#                 y = y * self.weight
+#         y = y.type_as(x) if self.use_fp32 else y
+#         # For compatibility with FLA-style API used in this file:
+#         # when residual is provided and prenorm=True, return (y, residual)
+#         # so upstream can do: y = mlp(y); out = residual + y
+#         if residual is not None:
+#             return y, residual
+#         return y
 
-    def forward(self, x, residual: Optional[torch.Tensor] = None, prenorm: bool = False, residual_in_fp32: bool = False):
-        if self.use_fp32:
-            y = self._norm(x.float())
-        else:
-            y = self._norm(x)
-        if self.weight is not None:
-            if self.use_fp32:
-                y = y * self.weight.float()
-            else:
-                y = y * self.weight
-        y = y.type_as(x) if self.use_fp32 else y
-        # For compatibility with FLA-style API used in this file:
-        # when residual is provided and prenorm=True, return (y, residual)
-        # so upstream can do: y = mlp(y); out = residual + y
-        if residual is not None:
-            return y, residual
-        return y
-
-    def extra_repr(self) -> str:
-        return f'dim={self.dim}, eps={self.eps}, elementwise_affine={self.elementwise_affine}'
+#     def extra_repr(self) -> str:
+#         return f'dim={self.dim}, eps={self.eps}, elementwise_affine={self.elementwise_affine}'
 
 @triton.jit
 def shift_fwd_kernel(
