@@ -5,7 +5,7 @@
 [![License](https://img.shields.io/badge/License-Apache_2.0-yellow.svg)](https://opensource.org/licenses/Apache-2.0)
 [![Python 3.12+](https://img.shields.io/badge/python-3.12+-blue.svg)](https://www.python.org/downloads/)
 
-This repository contains the official implementation of the paper **"Group Representational Position Encoding (GRAPE)"**.
+Official implementation of the paper **"Group Representational Position Encoding (GRAPE)"**.
 
 GRAPE is a unified group-theoretic framework for positional encoding that subsumes multiplicative mechanisms (like RoPE) and additive mechanisms (like ALiBi and FoX) under a single mathematical formalism. By leveraging group actions, specifically rotations in $SO(d)$ and unipotent lifts in $GL(d+k)$, GRAPE guarantees exact relative position laws and efficient streaming cacheability.
 
