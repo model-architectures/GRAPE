@@ -56,7 +56,7 @@ Ensure you have Python 3.10 or higher installed. It's recommended to use a virtu
 
    ```bash
    git clone https://github.com/model-architectures/GRAPE.git
-   cd TPA
+   cd GRAPE
    ```
 2. **Create and Activate a Virtual Environment**
 
