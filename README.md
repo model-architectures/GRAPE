@@ -1,6 +1,6 @@
 # GRAPE: Group Representational Position Encoding
 
-[![arXiv](https://img.shields.io/badge/arXiv-2512.xxxxx-b31b1b.svg)](https://arxiv.org)
+[![arXiv](https://img.shields.io/badge/arXiv-2512.07805-b31b1b.svg)](https://arxiv.org)
 [![License](https://img.shields.io/badge/License-Apache_2.0-yellow.svg)](https://opensource.org/licenses/Apache-2.0)
 [![Python 3.12+](https://img.shields.io/badge/python-3.12+-blue.svg)](https://www.python.org/downloads/)
 
@@ -8,7 +8,7 @@ This repository contains the official implementation of the paper **"Group Repre
 
 GRAPE is a unified group-theoretic framework for positional encoding that subsumes multiplicative mechanisms (like RoPE) and additive mechanisms (like ALiBi and FoX) under a single mathematical formalism. By leveraging group actions, specifically rotations in $SO(d)$ and unipotent lifts in $GL(d+k)$, GRAPE guarantees exact relative position laws and efficient streaming cacheability.
 
-Authors: [Yifan Zhang](https://yifzhang.com), [Zixiang Chen](https://sites.google.com/view/zxchen/home), [Yifeng Liu](https://lauyikfung.github.io), [Zhen Qin](https://doraemonzzz.com), [Huizhuo Yuan](https://scholar.google.com/citations?user=8foZzX4AAAAJ), [Kangping Xu](), [Yang Yuan](https://scholar.google.com/citations?user=7o4wtKEAAAAJ&hl=en), [Quanquan Gu](https://web.cs.ucla.edu/~qgu/), [Andrew Chi-Chih Yao](https://en.wikipedia.org/wiki/Andrew_Yao)
+Authors: [Yifan Zhang](https://yifzhang.com), [Zixiang Chen](https://sites.google.com/view/zxchen/home), [Yifeng Liu](https://lauyikfung.github.io), [Zhen Qin](https://doraemonzzz.com), [Huizhuo Yuan](https://scholar.google.com/citations?user=8foZzX4AAAAJ), [Kangping Xu](), [Yang Yuan](https://scholar.google.com/citations?user=7o4wtKEAAAAJ&hl=en), [Quanquan Gu](https://web.cs.ucla.edu/~qgu/), [Andrew Chi-Chih Yao](https://en.wikipedia.org/wiki/Andrew_Yao) 
 
 [[Webpage](https://tensorgi.github.io/TPA)] 
 
@@ -125,7 +125,7 @@ If you find this work useful, please cite our paper:
 @article{zhang2025grape,
   title={Group Representational Position Encoding},
   author={Zhang, Yifan and Xu, Kangping and Chen, Zixiang and Liu, Yifeng and Qin, Zhen and Yuan, Huizhuo and Gu, Quanquan and Yuan, Yang and Yao, Andrew Chi-Chih},
-  journal={arXiv preprint},
+  journal={arXiv preprint arXiv:2512.07805},
   year={2025}
 }
 ```
