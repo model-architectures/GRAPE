@@ -39,71 +39,121 @@ $$G_{add}(n) = \exp(n \omega A) = I + n \omega A$$
 This yields an exact relative law where attention scores depend strictly on the offset $j-i$:
 $$\tilde{q}_i^\top \tilde{k}_j = q_i^\top k_j + \text{bias}(j-i)$$
 
-## 🛠️ Installation
+## Features
 
-```bash
-conda create -n grape python=3.12
-conda activate grape
-pip install torch==2.4.0 numpy transformers datasets tiktoken wandb tqdm
-````
+- **Scalability:** Efficient training procedures optimized for large-scale datasets and multi-GPU setups.
+- **Flexible Data Support:** Compatible with popular datasets like [Fineweb-Edu-100B](https://huggingface.co/datasets/HuggingFaceFW/fineweb-edu/) and [OpenWebText](https://openwebtext2.readthedocs.io/en/latest/).
+- **Comprehensive Evaluation:** Integrated with [lm-evaluation-harness](https://github.com/EleutherAI/lm-evaluation-harness) for standardized benchmarking.
 
-## 💻 Usage
+## Hardware Requirements
+A100 and H100 are recommended. At least 8*80G VRAM is needed.
 
-### Multiplicative GRAPE (RoPE-style)
+## Installation
 
-```python
-import torch
+Ensure you have Python 3.10 or higher installed. It's recommended to use a virtual environment to manage dependencies.
 
-def apply_grape_m(q, k, frequencies):
-    """
-    Applies Multiplicative GRAPE (Rotary) using the closed-form 
-    rank-2 update logic described in Section 2.3.
-    """
-    # Assuming q, k are shape (B, Seq, Heads, Dim)
-    # Frequencies shape (Dim/2)
-    
-    # 1. Reshape for rank-2 plane operations
-    q_reshaped = q.float().reshape(*q.shape[:-1], -1, 2)
-    k_reshaped = k.float().reshape(*k.shape[:-1], -1, 2)
-    
-    # 2. Compute sin/cos tables (standard caching applies here)
-    # Note: In GRAPE, 'theta' corresponds to n * omega
-    # Implementation details match Algorithm 1 in Appendix G
-    ...
-    
-    # 3. Apply rotation (standard complex number multiplication view)
-    # This recovers the standard RoPE implementation when bases are canonical.
-    q_out = complex_mult(q_reshaped, freqs_cis)
-    k_out = complex_mult(k_reshaped, freqs_cis)
-    
-    return q_out, k_out
-```
+1. **Clone the Repository**
 
-### Additive GRAPE (ALiBi/FoX-style)
+   ```bash
+   git clone https://github.com/model-architectures/GRAPE.git
+   cd TPA
+   ```
+2. **Create and Activate a Virtual Environment**
 
-```python
-import torch
+   ```bash
+   python3 -m venv venv
+   source venv/bin/activate  # On Windows: venv\Scripts\activate
+   ```
+3. **Install Required Packages**
 
-def compute_grape_a_bias(seq_len, num_heads, slope_rate):
-    """
-    Computes the Additive GRAPE bias matrix.
-    Equivalent to ALiBi when using the canonical rank-1 unipotent generator.
-    """
-    # Generate relative positions
-    context_position = torch.arange(seq_len)[:, None]
-    memory_position = torch.arange(seq_len)[None, :]
-    relative_position = memory_position - context_position 
-    
-    # Apply scalar slope (omega * u^T * v)
-    # Section 4.1: Linear-in-offset bias
-    bias = relative_position * slope_rate
-    
-    # Mask future positions
-    mask = torch.triu(torch.ones(seq_len, seq_len), diagonal=1).bool()
-    bias.masked_fill_(mask, float('-inf'))
-    
-    return bias
-```
+   ```bash
+   pip install torch==2.4.0 numpy transformers datasets tiktoken wandb tqdm
+   ```
+
+## Data Preparation
+
+Prepare the necessary datasets before pretraining the model. T6 supports both [Fineweb-Edu-100B](https://huggingface.co/datasets/HuggingFaceFW/fineweb-edu/) and [OpenWebText](https://openwebtext2.readthedocs.io/en/latest/).
+
+### Fineweb-Edu-100B
+
+Fineweb-Edu-100B is a large-scale educational dataset hosted on Hugging Face.
+
+1. **Navigate to the Data Directory**
+
+   ```bash
+   cd data/fineweb-edu
+   ```
+2. **Run the Data Preparation Script**
+
+   ```bash
+   python fineweb-edu.py
+   ```
+3. **Move the Prepared Data**
+
+   ```bash
+   mv fineweb-edu100B ..
+   cd ../..
+   ```
+
+### OpenWebText
+
+OpenWebText is an open reproduction of OpenAI's WebText dataset.
+
+1. **Run the Data Preparation Script**
+
+   ```bash
+   python data/openwebtext/prepare.py
+   ```
+
+   *Ensure you have sufficient storage and computational resources, as OpenWebText is sizable.*
+
+## Pretraining
+
+Pretrain the T6 model using the prepared datasets. The provided scripts support distributed training across multiple GPUs.
+
+1. **Using the Provided Bash Script**
+
+   Execute the pretraining script, which handles the training process.
+
+   ```bash
+   bash pretrain.sh
+   ```
+2. **Manual Execution with `torchrun`**
+
+   For more control or customization, use `torchrun` to initiate training. Replace `config/train_T6_medium_adam_80g8.py` with your desired configuration file.
+
+   ```bash
+   torchrun --standalone --nproc_per_node=8 \
+       train_adam_finewebedu.py \
+       config/train_llama_mha_rope_medium_adam_80g8.py 
+   ```
+
+   - `--nproc_per_node=8` specifies the number of processes (typically matching the number of GPUs).
+
+## Evaluation
+
+Evaluate the performance of the pretrained T6 model using standardized benchmarks.
+
+1. **Navigate to the Evaluation Harness Directory**
+
+   ```bash
+   cd lm-evaluation-harness
+   ```
+2. **Follow the Instructions Within This Directory**
+
+   *Ensure your model is compatible with the evaluation harness requirements.*
+
+## Acknowledgements
+
+- [Karpathy’s nanoGPT](https://github.com/karpathy/nanoGPT) provides the foundational codebase upon which this repo is built.
+- [Hugging Face](https://huggingface.co/) for providing the [Fineweb-Edu-100B](https://huggingface.co/datasets/HuggingFaceFW/fineweb-edu/) dataset.
+- [EleutherAI](https://www.eleuther.ai/) for the [lm-evaluation-harness](https://github.com/EleutherAI/lm-evaluation-harness).
+- [OpenWebText](https://openwebtext2.readthedocs.io/en/latest/) team for replicating the WebText dataset.
+
+## Star History
+
+[![Star History Chart](https://api.star-history.com/svg?repos=model-architectures/GRAPE&type=Date)](https://star-history.com/#model-architectures/GRAPEA&Date)
+
 
 ## 📊 Experiments
 
@@ -125,7 +175,7 @@ If you find this work useful, please cite our paper:
 ```bibtex
 @article{zhang2025grape,
   title={Group Representational Position Encoding},
-  author={Zhang, Yifan and Xu, Kangping and Chen, Zixiang and Liu, Yifeng and Qin, Zhen and Yuan, Huizhuo and Gu, Quanquan and Yuan, Yang and Yao, Andrew Chi-Chih},
+  author={Zhang, Yifan and Chen, Zixiang and Liu, Yifeng and Qin, Zhen and Yuan, Huizhuo and Xu, Kangping and Yuan, Yang and Gu, Quanquan and Yao, Andrew Chi-Chih},
   journal={arXiv preprint arXiv:2512.07805},
   year={2025}
 }
