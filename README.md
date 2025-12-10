@@ -109,7 +109,7 @@ OpenWebText is an open reproduction of OpenAI's WebText dataset.
 
 ## Pretraining
 
-Pretrain the T6 model using the prepared datasets. The provided scripts support distributed training across multiple GPUs.
+Pretrain the GRAPE and other models using the prepared datasets. The provided scripts support distributed training across multiple GPUs.
 
 1. **Using the Provided Bash Script**
 
