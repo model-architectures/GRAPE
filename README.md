@@ -72,7 +72,7 @@ Ensure you have Python 3.10 or higher installed. It's recommended to use a virtu
 
 ## Data Preparation
 
-Prepare the necessary datasets before pretraining the model. T6 supports both [Fineweb-Edu-100B](https://huggingface.co/datasets/HuggingFaceFW/fineweb-edu/) and [OpenWebText](https://openwebtext2.readthedocs.io/en/latest/).
+Prepare the necessary datasets before pretraining the model. This codebase supports both [Fineweb-Edu-100B](https://huggingface.co/datasets/HuggingFaceFW/fineweb-edu/) and [OpenWebText](https://openwebtext2.readthedocs.io/en/latest/).
 
 ### Fineweb-Edu-100B
 
@@ -120,7 +120,7 @@ Pretrain the GRAPE and other models using the prepared datasets. The provided sc
    ```
 2. **Manual Execution with `torchrun`**
 
-   For more control or customization, use `torchrun` to initiate training. Replace `config/train_T6_medium_adam_80g8.py` with your desired configuration file.
+   For more control or customization, use `torchrun` to initiate training. Replace `train_llama_mha_rope_medium_adam_80g8.py` with your desired configuration file.
 
    ```bash
    torchrun --standalone --nproc_per_node=8 \
@@ -132,7 +132,7 @@ Pretrain the GRAPE and other models using the prepared datasets. The provided sc
 
 ## Evaluation
 
-Evaluate the performance of the pretrained T6 model using standardized benchmarks.
+Evaluate the performance of the pretrained model using standardized benchmarks.
 
 1. **Navigate to the Evaluation Harness Directory**
 
