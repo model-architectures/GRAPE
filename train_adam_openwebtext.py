@@ -25,7 +25,7 @@ always_save_checkpoint = True  # if True, always save a checkpoint after each ev
 init_from = 'scratch'  # 'scratch' or 'resume' or 'gpt2*'
 # wandb logging
 wandb_log = False  # disabled by default
-wandb_project = 'nanogpt-next'
+wandb_project = 'nanogpt-grape'
 wandb_run_name = 'gpt2'  # 'run' + str(time.time())
 # data
 dataset = 'openwebtext'
