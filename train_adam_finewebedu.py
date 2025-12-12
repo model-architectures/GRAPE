@@ -28,7 +28,7 @@ init_from = 'scratch'  # 'scratch' or 'resume' or 'gpt2*'
 # init_from = 'resume'
 # wandb logging
 wandb_log = False  # disabled by default
-wandb_project = 'nanogpt-next'
+wandb_project = 'nanogpt-grape'
 wandb_run_name = 'gpt2'  # 'run' + str(time.time())
 # data
 dataset = 'fineweb-edu100B'

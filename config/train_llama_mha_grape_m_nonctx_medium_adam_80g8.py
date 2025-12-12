@@ -8,7 +8,7 @@ from datetime import datetime
 
 # Wandb configs
 wandb_log = True
-wandb_project = 'nanogpt-next-grape'
+wandb_project = 'nanogpt-grape'
 
 # Model configs
 n_layer = 24
@@ -54,4 +54,4 @@ schedule = 'cosine'
 
 # System configs
 compile = True
-model_type = 'llama-mha-grape-nonctx-type1'
+model_type = 'llama-mha-grape-m-nonctx'

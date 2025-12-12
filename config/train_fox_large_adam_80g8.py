@@ -4,7 +4,7 @@ from datetime import datetime
 
 # Wandb configs
 wandb_log = True
-wandb_project = 'nanogpt-next-grape'
+wandb_project = 'nanogpt-grape'
 
 # Model configs
 n_layer = 36
