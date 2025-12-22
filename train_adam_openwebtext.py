@@ -12,6 +12,8 @@ from torch.distributed import destroy_process_group, init_process_group
 from torch.nn.parallel import DistributedDataParallel as DDP
 from torch.optim import AdamW
 
+from optim_utils import get_optimizer_param_groups
+
 # -----------------------------------------------------------------------------
 # default config values designed to train a gpt2 (124M) on Fineweb-edu 100B
 # I/O
@@ -25,7 +27,7 @@ always_save_checkpoint = True  # if True, always save a checkpoint after each ev
 init_from = 'scratch'  # 'scratch' or 'resume' or 'gpt2*'
 # wandb logging
 wandb_log = False  # disabled by default
-wandb_project = 'nanogpt-grape'
+wandb_project = 'nanogpt-next'
 wandb_run_name = 'gpt2'  # 'run' + str(time.time())
 # data
 dataset = 'openwebtext'
@@ -42,11 +44,14 @@ n_embd = 768
 dropout = 0.0  # for pretraining 0 is good, for finetuning try 0.1+
 bias = False  # do we use bias inside LayerNorm and Linear layers?
 using_groupnorm = False
+# KV shifting (optional)
+use_k_shift = False
+use_v_shift = False
 # optimizer
 optimizer_name = 'adamw'
-learning_rate = 6e-4  # max learning rate
+learning_rate = 1e-3  # max learning rate
 max_iters = 600000  # total number of training iterations
-weight_decay = 1e-1
+weight_decay = 0.01
 beta1 = 0.9
 beta2 = 0.95
 grad_clip = 1.0  # clip gradients at this value, or disable if == 0.0
@@ -92,6 +97,7 @@ def get_num_params(self, non_embedding=False):
     if non_embedding:
         n_params -= self.transformer.wpe.weight.numel()
     return n_params
+
 
 # Get current date and job ID
 current_date = datetime.now().strftime("%Y%m%d_%H%M%S")
@@ -204,8 +210,9 @@ model_args = {
     # Init/normalization knobs (with sensible defaults)
     'embedding_init_std': globals().get('embedding_init_std', 0.02),
     'hidden_init_std_factor': globals().get('hidden_init_std_factor', 0.5),
-    'use_fp32_rmsnorm': globals().get('use_fp32_rmsnorm', True),
     'use_qk_rmsnorm': globals().get('use_qk_rmsnorm', True),
+    'use_k_shift': globals().get('use_k_shift', False),
+    'use_v_shift': globals().get('use_v_shift', False),
     'p_tie_mode': globals().get('p_tie_mode', 'none'),
     'p_head_dim': globals().get('p_head_dim', None),
 }  # start with model_args from command line
@@ -213,8 +220,6 @@ model_args = {
 # Fox-specific toggles (only relevant when using model_type == 'fox')
 if model_type == 'fox':
     model_args.update({
-        'use_k_shift': globals().get('use_k_shift', False),
-        'use_v_shift': globals().get('use_v_shift', False),
         'fgate_type': globals().get('fgate_type', 'full'),
     })
 
@@ -225,6 +230,24 @@ if "gqa" in model_type:
 if 'grape' in model_type:
     for key, value in list(globals().items()):
         if key.startswith('grape_'):
+            model_args[key] = value
+
+# Pass through any key-gated additive bias hyperparameters provided via config files.
+if 'keygated' in model_type:
+    for key, value in list(globals().items()):
+        if key.startswith('keygated_'):
+            model_args[key] = value
+
+# Pass through any query-gated additive bias hyperparameters provided via config files.
+if 'querygated' in model_type or 'querykeygated' in model_type:
+    for key, value in list(globals().items()):
+        if key.startswith('querygated_'):
+            model_args[key] = value
+
+# Pass through any query+key-gated additive bias hyperparameters provided via config files.
+if 'querykeygated' in model_type:
+    for key, value in list(globals().items()):
+        if key.startswith('querykeygated_'):
             model_args[key] = value
 
 if init_from == 'scratch':
@@ -292,13 +315,12 @@ if master_process:
 scaler = torch.cuda.amp.GradScaler(enabled=(dtype == 'float16'))
 
 # Optimizer
-params = list(model.parameters())
+param_groups = get_optimizer_param_groups(model, weight_decay)
 optimizer = AdamW(
-    params,
+    param_groups,
     lr=learning_rate,
     betas=(beta1, beta2),
     eps=1e-8,
-    weight_decay=weight_decay,
 )
 if init_from == 'resume':
     optimizer.load_state_dict(checkpoint['optimizer'])

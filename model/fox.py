@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import math
-import warnings
 from typing import List, Tuple, Optional, Any, Dict, Union
 
 import torch
@@ -25,9 +24,9 @@ Removes dependency on FLA modules.
 
 # Local simple fused CE wrapper (compat shim)
 class FusedCrossEntropyLoss(nn.Module):
-    def __init__(self, inplace_backward: bool = False):
+    def __init__(self, inplace_backward: bool = False, ignore_index: int = -1):
         super().__init__()
-        self.loss = nn.CrossEntropyLoss()
+        self.loss = nn.CrossEntropyLoss(ignore_index=ignore_index)
 
     def forward(self, input: torch.Tensor, target: torch.Tensor) -> torch.Tensor:
         return self.loss(input, target)
@@ -92,13 +91,13 @@ class RotaryEmbedding(nn.Module):
         q = self._apply_rotary(q, cos, sin)
         k = self._apply_rotary(k, cos, sin)
         return q, k
+
 from einops import rearrange
 
 import triton
 import triton.language as tl
-import pytest
 
-from .forgetting_attention import forgetting_attention
+from forgetting_transformer import forgetting_attention
 
 from functools import partial
 
@@ -111,42 +110,7 @@ def maybe_contiguous(x):
     # so inner-dimension contiguity is enforced.
     return x.contiguous() if x.stride(-1) != 1 else x
 
-from .layernorm import RMSNorm
-# class RMSNorm(nn.Module):
-#     def __init__(self, dim: int, eps: float = 1e-5, elementwise_affine: bool = True, use_fp32: bool = True):
-#         super().__init__()
-#         self.dim = dim
-#         self.eps = eps
-#         self.elementwise_affine = elementwise_affine
-#         self.use_fp32 = use_fp32
-#         if self.elementwise_affine:
-#             self.weight = nn.Parameter(torch.ones(dim))
-#         else:
-#             self.register_parameter('weight', None)
-
-#     def _norm(self, x):
-#         return x * torch.rsqrt(x.pow(2).mean(-1, keepdim=True) + self.eps)
-
-#     def forward(self, x, residual: Optional[torch.Tensor] = None, prenorm: bool = False, residual_in_fp32: bool = False):
-#         if self.use_fp32:
-#             y = self._norm(x.float())
-#         else:
-#             y = self._norm(x)
-#         if self.weight is not None:
-#             if self.use_fp32:
-#                 y = y * self.weight.float()
-#             else:
-#                 y = y * self.weight
-#         y = y.type_as(x) if self.use_fp32 else y
-#         # For compatibility with FLA-style API used in this file:
-#         # when residual is provided and prenorm=True, return (y, residual)
-#         # so upstream can do: y = mlp(y); out = residual + y
-#         if residual is not None:
-#             return y, residual
-#         return y
-
-#     def extra_repr(self) -> str:
-#         return f'dim={self.dim}, eps={self.eps}, elementwise_affine={self.elementwise_affine}'
+from .rmsnorm import RMSNorm, GroupNorm
 
 @triton.jit
 def shift_fwd_kernel(
@@ -358,48 +322,6 @@ def token_shift(x, prev_weight, curr_weight):
     return TokenShift.apply(x, prev_weight, curr_weight)
 
 
-
-@pytest.mark.parametrize("B, T, H, D", [(4, 2048, 12, 128)])
-def test_op(B, T, H, D, dtype=torch.float32):
-    torch.manual_seed(24)
-    B = 4
-    T = 2088
-    H = 12
-    D = 128
-    # x = torch.rand(size, device='cuda')
-    x = torch.randn(B, T, H, D, device="cuda", dtype=dtype, requires_grad=True)
-    dout = torch.randn(B, T, H, D, device="cuda", dtype=dtype)
-    curr_weight = torch.rand(B, T, H, device="cuda", requires_grad=True)
-
-    prev_weight = 1.0 - curr_weight
-    x_prev = torch.roll(x, shifts=1, dims=1)
-    x_prev[:, 0, :, :] = 0.0
-    ref_out = (x_prev * prev_weight[..., None] + x * curr_weight[..., None]).to(dtype)
-
-    ref_out.backward(dout)
-    ref_dx, x.grad = x.grad.clone(), None
-    ref_dcurr_weight, curr_weight.grad = curr_weight.grad.clone(), None
-
-
-    prev_weight = 1.0 - curr_weight
-    # out_torch = x if x.sum() > 0.0 else y
-
-    tri_out = token_shift(x, prev_weight, curr_weight)
-
-
-    tri_out.backward(dout)
-    tri_dx, x.grad = x.grad.clone(), None
-    tri_dcurr_weight, curr_weight.grad = curr_weight.grad.clone(), None
-
-    # out_torch = x if x.sum() > 0.0 else y
-
-    # import pdb; pdb.set_trace()
-
-    assert torch.allclose(ref_out, tri_out, atol=1e-2, rtol=0), (ref_out - tri_out).abs().max()
-    assert torch.allclose(ref_dx, tri_dx, atol=1e-2, rtol=0), (ref_dx - tri_dx).abs().max()
-    assert torch.allclose(ref_dcurr_weight, tri_dcurr_weight, atol=1e-2, rtol=0), (ref_dcurr_weight - tri_dcurr_weight).abs().max()
-
-    
 def glu_linear(gate: torch.Tensor, y: torch.Tensor, weight: torch.Tensor, bias: Optional[torch.Tensor]):
     z = torch.sigmoid(gate) * y
     return F.linear(z.to(weight.dtype), weight, bias)
@@ -435,23 +357,23 @@ class FgateDynamicCache(Cache):
         self.value_cache: List[torch.Tensor] = []
         self.log_fgate_cache: List[torch.Tensor] = []
 
-        self.key_shift_cache: List[torch.Tensor] = []
-        self.value_shift_cache: List[torch.Tensor] = []
+        self.key_shift_cache: List[Optional[torch.Tensor]] = []
+        self.value_shift_cache: List[Optional[torch.Tensor]] = []
 
         self._seen_tokens = 0  # Used in `generate` to keep tally of how many tokens the cache has seen
 
     def update_shift_cache(
         self,
-        key_shift_state: torch.Tensor,
-        value_shift_state: torch.Tensor,
-        layer_idx,
+        key_shift_state: Optional[torch.Tensor],
+        value_shift_state: Optional[torch.Tensor],
+        layer_idx: int,
     ):
         assert layer_idx == len(self.key_shift_cache) == len(self.value_shift_cache)
         self.key_shift_cache.append(key_shift_state)
         self.value_shift_cache.append(value_shift_state)
 
 
-    def __getitem__(self, layer_idx: int) -> List[Tuple[torch.Tensor]]:
+    def __getitem__(self, layer_idx: int) -> Tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
         """
         Support for backwards-compatible `past_key_value` indexing, e.g. `past_key_value[0][0].shape[2]` to get the
         sequence length.
@@ -483,7 +405,7 @@ class FgateDynamicCache(Cache):
         log_fgate_states: torch.Tensor,
         layer_idx: int,
         cache_kwargs: Optional[Dict[str, Any]] = None,
-    ) -> Tuple[torch.Tensor, torch.Tensor]:
+    ) -> Tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
         """
         Updates the cache with the new `key_states` and `value_states` for the layer `layer_idx`.
 
@@ -528,7 +450,7 @@ class FgateDynamicCache(Cache):
         """Returns the maximum sequence length of the cached states. DynamicCache does not have a maximum length."""
         return None
 
-    def to_legacy_cache(self) -> Tuple[Tuple[torch.Tensor], Tuple[torch.Tensor]]:
+    def to_legacy_cache(self) -> Tuple[Tuple[torch.Tensor, torch.Tensor, torch.Tensor], ...]:
         """Converts the `DynamicCache` instance into the its equivalent in the legacy cache format. Used for
         backward compatibility."""
         legacy_cache = ()
@@ -537,16 +459,37 @@ class FgateDynamicCache(Cache):
         return legacy_cache
 
     @classmethod
-    def from_legacy_cache(cls, past_key_values: Optional[Tuple[Tuple[torch.FloatTensor]]] = None, num_layers: Optional[int] = None) -> "DynamicCache":
-        """Converts a cache in the legacy cache format into an equivalent `DynamicCache`. Used for
-        backward compatibility."""
-        raise NotImplementedError
-        assert num_layers is not None
-        cache = cls(num_layers)
-        if past_key_values is not None:
-            for layer_idx in range(len(past_key_values)):
-                key_states, value_states, log_fgate_states = past_key_values[layer_idx]
-                cache.update(key_states, value_states, log_fgate_states, layer_idx)
+    def from_legacy_cache(
+        cls,
+        past_key_values: Optional[Tuple[Tuple[torch.FloatTensor, torch.FloatTensor, torch.FloatTensor], ...]] = None,
+        num_layers: Optional[int] = None,
+    ) -> "FgateDynamicCache":
+        """Convert legacy tuple cache into `FgateDynamicCache` (keys, values, log_fgates)."""
+        cache = cls()
+
+        if past_key_values is None:
+            if num_layers is not None:
+                cache.key_shift_cache = [None] * num_layers
+                cache.value_shift_cache = [None] * num_layers
+            return cache
+
+        for layer_idx, (key_states, value_states, log_fgate_states) in enumerate(past_key_values):
+            cache.update(key_states, value_states, log_fgate_states, layer_idx)
+
+            # Initialize shift states (used only if k/v shift is enabled).
+            batch_size = key_states.shape[0]
+            kv_dim = int(key_states.shape[1]) * int(key_states.shape[-1])
+            cache.update_shift_cache(
+                key_shift_state=key_states.new_zeros(batch_size, kv_dim),
+                value_shift_state=value_states.new_zeros(batch_size, kv_dim),
+                layer_idx=layer_idx,
+            )
+
+        if num_layers is not None and num_layers > len(cache.key_shift_cache):
+            extra = num_layers - len(cache.key_shift_cache)
+            cache.key_shift_cache.extend([None] * extra)
+            cache.value_shift_cache.extend([None] * extra)
+
         return cache
 
     def crop(self, max_length: int):
@@ -565,29 +508,53 @@ class FgateDynamicCache(Cache):
             self.value_cache[idx] = self.value_cache[idx][..., :max_length, :]
             self.log_fgate_cache[idx] = self.log_fgate_cache[idx][..., :max_length]
 
-    def batch_split(self, full_batch_size: int, split_size: int) -> List["DynamicCache"]:
+    def batch_split(self, full_batch_size: int, split_size: int) -> List["FgateDynamicCache"]:
         """Split the current instance into a list of `DynamicCache` by the batch size. This will be used by
         `_split_model_inputs()` in `generation.utils`"""
         out = []
         for i in range(0, full_batch_size, split_size):
-            current_split = DynamicCache()
+            current_split = self.__class__()
             current_split._seen_tokens = self._seen_tokens
             current_split.key_cache = [tensor[i : i + split_size] for tensor in self.key_cache]
             current_split.value_cache = [tensor[i : i + split_size] for tensor in self.value_cache]
             current_split.log_fgate_cache = [tensor[i : i + split_size] for tensor in self.log_fgate_cache]
+            current_split.key_shift_cache = [
+                None if tensor is None else tensor[i : i + split_size] for tensor in self.key_shift_cache
+            ]
+            current_split.value_shift_cache = [
+                None if tensor is None else tensor[i : i + split_size] for tensor in self.value_shift_cache
+            ]
             out.append(current_split)
         return out
 
     @classmethod
-    def from_batch_splits(cls, splits: List["DynamicCache"]) -> "DynamicCache":
+    def from_batch_splits(cls, splits: List["FgateDynamicCache"]) -> "FgateDynamicCache":
         """This is the opposite of the above `batch_split()` method. This will be used by `stack_model_outputs` in
         `generation.utils`"""
         cache = cls()
-        for idx in range(len(splits[0])):
-            layer_keys = torch.cat([current.key_cache[idx] for current in splits], dim=0)
-            layer_values = torch.cat([current.value_cache[idx] for current in splits], dim=0)
-            layer_log_fgates = torch.cat([current.log_fgate_cache[idx] for current in splits], dim=0)
-            cache.update(layer_keys, layer_values, layer_log_fgates, idx)
+        if not splits:
+            return cache
+
+        cache._seen_tokens = splits[0]._seen_tokens
+
+        num_layers_kv = len(splits[0].key_cache)
+        cache.key_cache = [torch.cat([current.key_cache[idx] for current in splits], dim=0) for idx in range(num_layers_kv)]
+        cache.value_cache = [torch.cat([current.value_cache[idx] for current in splits], dim=0) for idx in range(num_layers_kv)]
+        cache.log_fgate_cache = [
+            torch.cat([current.log_fgate_cache[idx] for current in splits], dim=0) for idx in range(num_layers_kv)
+        ]
+
+        num_layers_shift = len(splits[0].key_shift_cache)
+        cache.key_shift_cache = []
+        cache.value_shift_cache = []
+        for layer_idx in range(num_layers_shift):
+            key_shifts = [current.key_shift_cache[layer_idx] for current in splits]
+            value_shifts = [current.value_shift_cache[layer_idx] for current in splits]
+
+            cache.key_shift_cache.append(None if any(t is None for t in key_shifts) else torch.cat(key_shifts, dim=0))
+            cache.value_shift_cache.append(
+                None if any(t is None for t in value_shifts) else torch.cat(value_shifts, dim=0)
+            )
         return cache
 
     def batch_repeat_interleave(self, repeats: int):
@@ -596,6 +563,11 @@ class FgateDynamicCache(Cache):
             self.key_cache[layer_idx] = self.key_cache[layer_idx].repeat_interleave(repeats, dim=0)
             self.value_cache[layer_idx] = self.value_cache[layer_idx].repeat_interleave(repeats, dim=0)
             self.log_fgate_cache[layer_idx] = self.log_fgate_cache[layer_idx].repeat_interleave(repeats, dim=0)
+        for layer_idx in range(len(self.key_shift_cache)):
+            if self.key_shift_cache[layer_idx] is not None:
+                self.key_shift_cache[layer_idx] = self.key_shift_cache[layer_idx].repeat_interleave(repeats, dim=0)
+            if self.value_shift_cache[layer_idx] is not None:
+                self.value_shift_cache[layer_idx] = self.value_shift_cache[layer_idx].repeat_interleave(repeats, dim=0)
 
     def batch_select_indices(self, indices: torch.Tensor):
         """Only keep the `indices` in the batch dimension of the cache. Used in contrastive search."""
@@ -603,6 +575,11 @@ class FgateDynamicCache(Cache):
             self.key_cache[layer_idx] = self.key_cache[layer_idx][indices, ...]
             self.value_cache[layer_idx] = self.value_cache[layer_idx][indices, ...]
             self.log_fgate_cache[layer_idx] = self.log_fgate_cache[layer_idx][indices, ...]
+        for layer_idx in range(len(self.key_shift_cache)):
+            if self.key_shift_cache[layer_idx] is not None:
+                self.key_shift_cache[layer_idx] = self.key_shift_cache[layer_idx][indices, ...]
+            if self.value_shift_cache[layer_idx] is not None:
+                self.value_shift_cache[layer_idx] = self.value_shift_cache[layer_idx][indices, ...]
             
 
 class GPTConfig(PretrainedConfig):
@@ -620,11 +597,10 @@ class GPTConfig(PretrainedConfig):
         head_dim: Optional[int] = None,
         block_size: int = 2048,
         # Common flags
-        bias: bool = False,
-        dropout: float = 0.0,
-        using_groupnorm: bool = False,
-        use_fp32_rmsnorm: bool = True,
-        use_qk_rmsnorm: bool = True,
+	        bias: bool = False,
+	        dropout: float = 0.0,
+	        using_groupnorm: bool = False,
+	        use_qk_rmsnorm: bool = True,
         # Init controls (match llama-mha-alibi)
         embedding_init_std: float = 0.02,
         hidden_init_std_factor: float = 0.5,
@@ -679,7 +655,6 @@ class GPTConfig(PretrainedConfig):
         self.bias = bias
         self.dropout = dropout
         self.using_groupnorm = using_groupnorm
-        self.use_fp32_rmsnorm = use_fp32_rmsnorm
         self.use_qk_rmsnorm = use_qk_rmsnorm
         # Init controls
         self.embedding_init_std = embedding_init_std
@@ -751,21 +726,24 @@ class ShiftLinear(nn.Module):
 
     def forward(self, x: torch.Tensor, shift_state: Optional[torch.Tensor]) -> torch.Tensor:
         assert x.ndim == 3, "Input must be (B, T, D)"
-        B, T, D = x.size()
+        _, seq_len, _ = x.size()
         out = self.linear(x)
         # (B, T, H, 1)
-        alpha = torch.sigmoid(self.shift_proj(x).float()).float()
+        alpha = torch.sigmoid(self.shift_proj(x).float())
         # left, right, top, bottom (B, T=H, D=W)
         # out_prev = nn.functional.pad(out, (0, 0, 1, -1))
         # out_prev = torch.roll(out, shifts=1, dims=1)
-        
+
         out_per_head = rearrange(out, 'b t (h d) -> b t h d', h=self.num_heads)
-        if T > 1:
+        if seq_len > 1:
             # TODO: note in this case cache is not used
             result_per_head = token_shift(out_per_head, alpha, 1.0 - alpha)
         else:
-            shift_state_per_head = rearrange(shift_state, 'b (h d) -> b 1 h d', h=self.num_heads)
-            result_per_head = (alpha[..., None] * shift_state_per_head + (1 - alpha[..., None]) * out_per_head)
+            if shift_state is None:
+                result_per_head = out_per_head
+            else:
+                shift_state_per_head = rearrange(shift_state, 'b (h d) -> b 1 h d', h=self.num_heads)
+                result_per_head = (alpha[..., None] * shift_state_per_head + (1 - alpha[..., None]) * out_per_head)
 
         result_per_head = result_per_head.to(out.dtype)
 
@@ -774,65 +752,6 @@ class ShiftLinear(nn.Module):
 
         result = rearrange(result_per_head, 'b t h d -> b t (h d)', h=self.num_heads)
         return result
-
-class GroupRMSNorm(nn.Module):
-    def __init__(
-        self,
-        num_groups: int,
-        hidden_size: int,
-        elementwise_affine: bool = True,
-        bias: bool = False,
-        eps: float = 1e-5
-    ) -> GroupRMSNorm:
-        super().__init__()
-
-        if hidden_size % num_groups != 0:
-            raise ValueError('num_channels must be divisible by num_groups')
-
-        self.num_groups = num_groups
-        self.hidden_size = hidden_size
-        self.elementwise_affine = elementwise_affine
-        self.eps = eps
-
-        self.register_parameter("weight", None)
-        self.register_parameter("bias", None)
-        if elementwise_affine:
-            self.weight = nn.Parameter(torch.ones(hidden_size))
-            if bias:
-                self.bias = nn.Parameter(torch.zeros(hidden_size))
-
-    def __repr__(self) -> str:
-        s = f"{self.__class__.__name__}({self.num_groups}, {self.hidden_size}"
-        if not self.elementwise_affine:
-            s += f", elementwise_affine={self.elementwise_affine}"
-        s += f", eps={self.eps}"
-        s += ")"
-        return s
-
-    def forward(self, x, residual: Optional[torch.Tensor] = None, prenorm: bool = False, residual_in_fp32: bool = False):
-        # x: (..., hidden_size)
-        B = x.shape[:-1]
-        D = x.shape[-1]
-        assert D == self.hidden_size, f"expected last dim {self.hidden_size}, got {D}"
-        group_size = D // self.num_groups
-        assert group_size * self.num_groups == D, "hidden_size must be divisible by num_groups"
-
-        x_f32 = x.float()
-        xg = x_f32.view(*B, self.num_groups, group_size)
-        # RMS over each group
-        rms = torch.rsqrt(xg.pow(2).mean(dim=-1, keepdim=True) + self.eps)
-        yg = xg * rms
-        y = yg.view(*B, D)
-
-        if self.weight is not None:
-            y = y * self.weight.float()
-        if self.bias is not None:
-            y = y + self.bias.float()
-
-        y = y.to(x.dtype)
-        if residual is not None:
-            return y, residual
-        return y
 
 class ForgettingAttentionLayer(nn.Module):
 
@@ -857,10 +776,9 @@ class ForgettingAttentionLayer(nn.Module):
         qk_norm_share_param_across_head: bool = False,
         use_k_shift: bool = False,
         use_v_shift: bool = False,
-        initializer_range: float = 0.02,
-        layer_idx: int = None,
-        use_fp32_rmsnorm: bool = True,
-    ):
+	        initializer_range: float = 0.02,
+	        layer_idx: int = None,
+	    ):
         """
         Forgetting Attention layer.
 
@@ -912,7 +830,6 @@ class ForgettingAttentionLayer(nn.Module):
         self.hidden_size = hidden_size
         self.head_dim = self.hidden_size // self.num_heads
         self.kv_dim = self.num_kv_heads * self.head_dim
-        self.kv_dim = self.num_kv_heads * self.head_dim
         self.window_size = window_size
         self.max_position_embeddings = max_position_embeddings
         self.layer_idx = layer_idx
@@ -928,7 +845,7 @@ class ForgettingAttentionLayer(nn.Module):
         else:
             self.v_proj = nn.Linear(self.hidden_size, self.kv_dim, bias=False)
 
-        self.o_proj = nn.Linear(self.hidden_size, self.hidden_size, bias=False)
+        self.c_proj = nn.Linear(self.hidden_size, self.hidden_size, bias=False)
         self.use_k_shift = use_k_shift
         self.use_v_shift = use_v_shift
 
@@ -962,7 +879,7 @@ class ForgettingAttentionLayer(nn.Module):
             with torch.no_grad():
                 log_decay_time = torch.linspace(math.log(decay_time_min), math.log(decay_time_max), steps=self.num_heads)
                 decay_time = torch.exp(log_decay_time)
-                # Such that t = -1 / log(sigmoid(b)) 
+                # Such that t = -1 / logsigmoid(b)
                 bias_init = -torch.log(torch.expm1(1 / decay_time))
                 self.fgate_bias.copy_(bias_init)
         else:
@@ -976,7 +893,7 @@ class ForgettingAttentionLayer(nn.Module):
             self.ogate_proj = None
 
         if use_output_norm:
-            self.output_norm = GroupRMSNorm(num_groups=self.num_heads, hidden_size=self.hidden_size, eps=norm_eps)
+            self.output_norm = RMSNorm(self.head_dim, eps=norm_eps, elementwise_affine=True)
         else:
             self.output_norm = None
 
@@ -986,18 +903,16 @@ class ForgettingAttentionLayer(nn.Module):
         else:
             self.rotary = None
 
-
         self.qk_norm = qk_norm
         self.qk_norm_share_param_across_head = qk_norm_share_param_across_head
-        self.use_fp32_rmsnorm = use_fp32_rmsnorm
         if qk_norm:
             if self.qk_norm_share_param_across_head:
                 # Learnable RMSNorm on each head channel, shared across heads
-                self.q_norm = RMSNorm(self.head_dim, eps=norm_eps, use_fp32=use_fp32_rmsnorm)
-                self.k_norm = RMSNorm(self.head_dim, eps=norm_eps, use_fp32=use_fp32_rmsnorm)
+                self.q_norm = RMSNorm(self.head_dim, eps=norm_eps)
+                self.k_norm = RMSNorm(self.head_dim, eps=norm_eps)
             else:
-                self.q_norm = GroupRMSNorm(num_groups=self.num_heads, hidden_size=self.hidden_size, eps=norm_eps)
-                self.k_norm = GroupRMSNorm(num_groups=self.num_heads, hidden_size=self.hidden_size, eps=norm_eps)
+                self.q_norm = GroupNorm(num_groups=self.num_heads, hidden_size=self.hidden_size, eps=norm_eps, is_rms_norm=True)
+                self.k_norm = GroupNorm(num_groups=self.num_heads, hidden_size=self.hidden_size, eps=norm_eps, is_rms_norm=True)
 
         self.initializer_range = initializer_range
         self.apply(self._initialize_weights)
@@ -1122,10 +1037,10 @@ class ForgettingAttentionLayer(nn.Module):
             )
             o = rearrange(o, "b h t d -> b t h d")
 
-        o = o.reshape(batch_size, q_len, self.hidden_size)
-
         if self.output_norm is not None:
             o = self.output_norm(o)
+
+        o = o.reshape(batch_size, q_len, self.hidden_size)
 
         if self.ogate_proj is not None:
             # ogate = self.ogate act(self.ogate_proj(hidden_states))
@@ -1134,13 +1049,23 @@ class ForgettingAttentionLayer(nn.Module):
             ogate_logit = self.ogate_proj(hidden_states)
             dtype = ogate_logit.dtype
             if self.ogate_act == "silu":
-                o = swiglu_linear(ogate_logit, o, self.o_proj.weight.to(dtype), self.o_proj.bias.to(dtype) if self.o_proj.bias is not None else self.o_proj.bias)
+                o = swiglu_linear(
+                    ogate_logit,
+                    o,
+                    self.c_proj.weight.to(dtype),
+                    self.c_proj.bias.to(dtype) if self.c_proj.bias is not None else self.c_proj.bias,
+                )
             elif self.ogate_act == "sigmoid":
-                o = glu_linear(ogate_logit, o, self.o_proj.weight.to(dtype), self.o_proj.bias.to(dtype) if self.o_proj.bias is not None else self.o_proj.bias)
+                o = glu_linear(
+                    ogate_logit,
+                    o,
+                    self.c_proj.weight.to(dtype),
+                    self.c_proj.bias.to(dtype) if self.c_proj.bias is not None else self.c_proj.bias,
+                )
             else:
                 raise ValueError(f"Unknown ogate act {self.ogate_act}")
         else:
-            o = self.o_proj(o)
+            o = self.c_proj(o)
 
         if not output_attentions:
             attentions = None
@@ -1227,7 +1152,7 @@ class ForgettingTransformerBlock(nn.Module):
         super().__init__()
         self.hidden_size = config.hidden_size
 
-        self.attn_norm = RMSNorm(config.hidden_size, eps=config.norm_eps, use_fp32=getattr(config, 'use_fp32_rmsnorm', True))
+        self.attn_norm = RMSNorm(config.hidden_size, eps=config.norm_eps)
         self.attn = ForgettingAttentionLayer(
             hidden_size=config.hidden_size,
             num_heads=config.num_heads,
@@ -1243,16 +1168,15 @@ class ForgettingTransformerBlock(nn.Module):
             decay_time_min=config.decay_time_min,
             decay_time_max=config.decay_time_max,
             use_output_norm = config.use_output_norm,
-            norm_eps=config.norm_eps,
-            qk_norm=config.qk_norm,
-            qk_norm_share_param_across_head=config.qk_norm_share_param_across_head,
-            use_k_shift=config.use_k_shift,
-            use_v_shift=config.use_v_shift,
-            initializer_range=config.initializer_range,
-            layer_idx=layer_idx,
-            use_fp32_rmsnorm=getattr(config, 'use_fp32_rmsnorm', True),
-        )
-        self.mlp_norm = RMSNorm(config.hidden_size, eps=config.norm_eps, use_fp32=getattr(config, 'use_fp32_rmsnorm', True))
+	            norm_eps=config.norm_eps,
+	            qk_norm=config.qk_norm,
+	            qk_norm_share_param_across_head=config.qk_norm_share_param_across_head,
+	            use_k_shift=config.use_k_shift,
+	            use_v_shift=config.use_v_shift,
+	            initializer_range=config.initializer_range,
+	            layer_idx=layer_idx,
+	        )
+        self.mlp_norm = RMSNorm(config.hidden_size, eps=config.norm_eps)
         self.mlp = ForgettingTransformerMLP(
             hidden_size=config.hidden_size,
             hidden_ratio=config.hidden_ratio,
@@ -1373,7 +1297,7 @@ class ForgettingTransformerModel(ForgettingTransformerPreTrainedModel):
 
         self.embeddings = nn.Embedding(config.vocab_size, config.hidden_size, self.padding_idx)
         self.layers = nn.ModuleList([ForgettingTransformerBlock(config, layer_idx) for layer_idx in range(config.num_hidden_layers)])
-        self.norm = RMSNorm(config.hidden_size, eps=config.norm_eps, use_fp32=getattr(config, 'use_fp32_rmsnorm', True))
+        self.norm = RMSNorm(config.hidden_size, eps=config.norm_eps)
 
         self.gradient_checkpointing = False
 
@@ -1396,10 +1320,6 @@ class ForgettingTransformerModel(ForgettingTransformerPreTrainedModel):
         output_hidden_states: Optional[bool] = None,
         return_dict: Optional[bool] = None
     ) -> Union[Tuple, CausalLMOutputWithPast]:
-        # if output_attentions:
-            # warnings.warn(
-                # "`ForgettingTransformerModel` does not support output attention weights now, so `output_attentions` is set to `False`."
-            # )
         output_attentions = output_attentions if output_attentions is not None else self.config.output_attentions
         output_hidden_states = output_hidden_states if output_hidden_states is not None else self.config.output_hidden_states
         use_cache = use_cache if use_cache is not None else (self.config.use_cache if not self.training else False)
@@ -1526,8 +1446,8 @@ class GPT(PreTrainedModel):
             for name, module in self.named_modules():
                 # attn output projection
                 if isinstance(module, ForgettingAttentionLayer):
-                    if hasattr(module, 'o_proj') and hasattr(module.o_proj, 'weight'):
-                        module.o_proj.weight.normal_(mean=0.0, std=proj_std)
+                    if hasattr(module, 'c_proj') and hasattr(module.c_proj, 'weight'):
+                        module.c_proj.weight.normal_(mean=0.0, std=proj_std)
                 # mlp output projection
                 if isinstance(module, ForgettingTransformerMLP):
                     if hasattr(module, 'down_proj') and hasattr(module.down_proj, 'weight'):
@@ -1535,7 +1455,7 @@ class GPT(PreTrainedModel):
 
             # Initialize all other 2D+ weights (excluding the above and tied embeddings)
             skip_suffixes = (
-                'attn.o_proj.weight',
+                'attn.c_proj.weight',
                 'mlp.down_proj.weight',
             )
             for name, p in self.named_parameters():
@@ -1623,16 +1543,14 @@ class GPT(PreTrainedModel):
 
         loss = None
         if targets is not None:
-            if self.config.fuse_cross_entropy:
-                loss_fct = FusedCrossEntropyLoss(inplace_backward=True)
-            else:
-                loss_fct = nn.CrossEntropyLoss()
             logits = self.lm_head(hidden_states)
             # Enable model parallelism
             targets = targets.to(logits.device)
-            # labels = torch.cat((labels[..., 1:], torch.full_like(labels[:, :1], loss_fct.ignore_index)), 1)
-            # loss = loss_fct(logits.view(-1, self.config.vocab_size), targets.view(-1))
-            loss = F.cross_entropy(logits.view(-1, logits.size(-1)), targets.view(-1), ignore_index=-1)
+            if self.config.fuse_cross_entropy:
+                loss_fct = FusedCrossEntropyLoss(inplace_backward=True, ignore_index=-1)
+            else:
+                loss_fct = nn.CrossEntropyLoss(ignore_index=-1)
+            loss = loss_fct(logits.view(-1, logits.size(-1)), targets.view(-1))
             # loss = loss.view(*targets.size())
             # loss = F.cross_entropy(logits.view(-1, logits.size(-1)), targets.view(-1), ignore_index=-1)
         elif output_all_seq:

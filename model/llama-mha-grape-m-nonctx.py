@@ -17,6 +17,10 @@ import torch.nn.functional as F
 from transformers.configuration_utils import PretrainedConfig
 from transformers.modeling_utils import PreTrainedModel
 
+from .rmsnorm import RMSNorm
+from .kv_shift import ShiftLinear
+from .init_utils import init_llama_mha_weights
+
 # -----------------------------------------------------------------------------
 # Utilities
 
@@ -50,7 +54,7 @@ class MSGRAPECommuting(nn.Module):
        angle[t, j] = t * freq[j]               (shared across heads)
        or angle[t, h, j] = t * freq[h, j]      (per-head)
 
-    cos/sin are computed in float32 then cast to bfloat16 (cache dtype) for memory, and
+    cos/sin are computed in float32 and cached in fp32 for consistency, and
     are broadcast across batch.
     """
     def __init__(
@@ -60,7 +64,8 @@ class MSGRAPECommuting(nn.Module):
         base: float = 10000.0,
         learnable: bool = True,
         share_across_heads: bool = True,
-        cache_dtype: torch.dtype = torch.bfloat16,
+        log_freq_scale: float = 1.0,
+        cache_dtype: torch.dtype = torch.float32,
     ):
         super().__init__()
         assert head_dim % 2 == 0, "head_dim must be even for planar rotations"
@@ -70,11 +75,17 @@ class MSGRAPECommuting(nn.Module):
         self.base = float(base)
         self.learnable = learnable
         self.share_across_heads = share_across_heads
+        if learnable:
+            self.log_freq_scale = float(log_freq_scale)
+            if self.log_freq_scale <= 0:
+                raise ValueError("log_freq_scale must be > 0")
+        else:
+            self.log_freq_scale = 1.0
         self.cache_dtype = cache_dtype
 
         # RoPE-style log-uniform initial spectrum on canonical planes
         inv_freq = 1.0 / (self.base ** (torch.arange(0, head_dim, 2).float() / head_dim))  # (D/2,)
-        log_init = inv_freq.log()  # initialize log-frequencies
+        log_init = inv_freq.log().float() * self.log_freq_scale  # scaled init for lr-scaling trick
 
         if share_across_heads:
             # One spectrum shared by all heads
@@ -89,19 +100,29 @@ class MSGRAPECommuting(nn.Module):
         self._cached_cos = None
         self._cached_sin = None
 
+    def _apply(self, fn):
+        # Keep log_freq in fp32 regardless of module-wide dtype casts.
+        super()._apply(fn)
+        if getattr(self, "log_freq", None) is not None:
+            self.log_freq.data = self.log_freq.data.float()
+            if self.log_freq.grad is not None:
+                self.log_freq.grad.data = self.log_freq.grad.data.float()
+        return self
+
     @property
     def freq(self):
         # strictly positive frequencies
+        scaled_log_freq = self.log_freq / self.log_freq_scale
         if self.share_across_heads:
             # (D/2,) -> (H, D/2) for uniform processing
-            return torch.exp(self.log_freq).unsqueeze(0).expand(self.n_head, self.d_half)
+            return torch.exp(scaled_log_freq).unsqueeze(0).expand(self.n_head, self.d_half)
         else:
             # (H, D/2)
-            return torch.exp(self.log_freq)
+            return torch.exp(scaled_log_freq)
 
     def get_cos_sin(self, T: int, device: torch.device, dtype: torch.dtype):
         """
-        Returns cos, sin with shapes (1, T, H, D/2) in cache_dtype (e.g., bfloat16).
+        Returns cos, sin with shapes (1, T, H, D/2) in cache_dtype (e.g., float32).
         Always recompute if T changes or buffers are on a different device.
         We recompute every forward to reflect frequency updates during training.
         """
@@ -141,37 +162,6 @@ class MSGRAPECommuting(nn.Module):
 # -----------------------------------------------------------------------------
 # RMSNorm, MLP, Attention, Blocks (as in llama-mha.py, with GRAPE dropped in)
 
-class RMSNorm(nn.Module):
-    def __init__(self, dim: int, eps: float = 1e-5, elementwise_affine=True, use_fp32: bool = True):
-        super().__init__()
-        self.dim = dim
-        self.eps = eps
-        self.elementwise_affine = elementwise_affine
-        self.use_fp32 = use_fp32
-        if self.elementwise_affine:
-            self.weight = nn.Parameter(torch.ones(dim))
-        else:
-            self.register_parameter('weight', None)
-
-    def _norm(self, x):
-        return x * torch.rsqrt(x.pow(2).mean(-1, keepdim=True) + self.eps)
-
-    def forward(self, x):
-        if self.use_fp32:
-            output = self._norm(x.float())
-        else:
-            output = self._norm(x)
-        if self.weight is not None:
-            if self.use_fp32:
-                output = output * self.weight.float()
-            else:
-                output = output * self.weight
-        return output.type_as(x) if self.use_fp32 else output
-
-    def extra_repr(self) -> str:
-        return f'dim={self.dim}, eps={self.eps}, elementwise_affine={self.elementwise_affine}'
-
-
 class CausalSelfAttention(nn.Module):
     def __init__(self, config):
         super().__init__()
@@ -182,8 +172,16 @@ class CausalSelfAttention(nn.Module):
 
         # QKV projections (no bias by default)
         self.c_q = nn.Linear(self.n_embd, self.n_head * self.head_dim, bias=False)
-        self.c_k = nn.Linear(self.n_embd, self.n_head * self.head_dim, bias=False)
-        self.c_v = nn.Linear(self.n_embd, self.n_head * self.head_dim, bias=False)
+        self.use_k_shift = getattr(config, "use_k_shift", False)
+        self.use_v_shift = getattr(config, "use_v_shift", False)
+        if self.use_k_shift:
+            self.c_k = ShiftLinear(self.n_embd, self.n_head * self.head_dim, self.n_head, bias=False)
+        else:
+            self.c_k = nn.Linear(self.n_embd, self.n_head * self.head_dim, bias=False)
+        if self.use_v_shift:
+            self.c_v = ShiftLinear(self.n_embd, self.n_head * self.head_dim, self.n_head, bias=False)
+        else:
+            self.c_v = nn.Linear(self.n_embd, self.n_head * self.head_dim, bias=False)
         # Output projection back to embedding dim
         self.c_proj = nn.Linear(self.n_head * self.head_dim, self.n_embd, bias=False)
 
@@ -200,26 +198,33 @@ class CausalSelfAttention(nn.Module):
             base=getattr(config, 'grape_base', 10000.0),
             learnable=getattr(config, 'grape_learnable_freq', True),
             share_across_heads=getattr(config, 'grape_share_across_heads', True),
-            cache_dtype=torch.bfloat16,
+            log_freq_scale=getattr(config, 'grape_log_freq_scale', 16.0),
+            cache_dtype=torch.float32,
         )
 
         # QK RMSNorm (learnable) flag and layers
         self.use_qk_rmsnorm = getattr(config, 'use_qk_rmsnorm', True)
         if self.use_qk_rmsnorm:
-            self.q_rms = RMSNorm(self.head_dim, eps=1e-5, elementwise_affine=True, use_fp32=config.use_fp32_rmsnorm)
-            self.k_rms = RMSNorm(self.head_dim, eps=1e-5, elementwise_affine=True, use_fp32=config.use_fp32_rmsnorm)
+            self.q_rms = RMSNorm(self.head_dim, eps=1e-5, elementwise_affine=True)
+            self.k_rms = RMSNorm(self.head_dim, eps=1e-5, elementwise_affine=True)
 
         # Optional per-head RMSNorm post attention (groupnorm-like)
         self.using_groupnorm = getattr(config, 'using_groupnorm', False)
         if self.using_groupnorm:
-            self.subln = RMSNorm(self.head_dim, eps=1e-5, elementwise_affine=True, use_fp32=config.use_fp32_rmsnorm)
+            self.subln = RMSNorm(self.head_dim, eps=1e-5, elementwise_affine=True)
 
     def forward(self, x):
         B, T, C = x.size()
         # Project to heads
         q = self.c_q(x).view(B, T, self.n_head, self.head_dim)
-        k = self.c_k(x).view(B, T, self.n_head, self.head_dim)
-        v = self.c_v(x).view(B, T, self.n_head, self.head_dim)
+        if self.use_k_shift:
+            k = self.c_k(x, None).view(B, T, self.n_head, self.head_dim)
+        else:
+            k = self.c_k(x).view(B, T, self.n_head, self.head_dim)
+        if self.use_v_shift:
+            v = self.c_v(x, None).view(B, T, self.n_head, self.head_dim)
+        else:
+            v = self.c_v(x).view(B, T, self.n_head, self.head_dim)
 
         # Apply commuting MS-GRAPE rotations to Q and K
         q, k = self.grape(q, k)
@@ -271,8 +276,8 @@ class Block(nn.Module):
         super().__init__()
         self.attn = CausalSelfAttention(config)
         self.mlp = MLP(config)
-        self.ln_1 = RMSNorm(config.n_embd, use_fp32=config.use_fp32_rmsnorm)
-        self.ln_2 = RMSNorm(config.n_embd, use_fp32=config.use_fp32_rmsnorm)
+        self.ln_1 = RMSNorm(config.n_embd)
+        self.ln_2 = RMSNorm(config.n_embd)
 
     def forward(self, x):
         x = x + self.attn(self.ln_1(x))
@@ -296,8 +301,9 @@ class GPTConfig(PretrainedConfig):
     dropout: float = 0.0
     scale_attn_by_inverse_layer_idx: bool = False
     using_groupnorm: bool = False
-    use_fp32_rmsnorm: bool = True
     use_qk_rmsnorm: bool = True
+    use_k_shift: bool = False
+    use_v_shift: bool = False
 
     # Initializations
     embedding_init_std: float = 0.02
@@ -307,6 +313,7 @@ class GPTConfig(PretrainedConfig):
     grape_base: float = 10000.0             # RoPE-style base for init
     grape_learnable_freq: bool = True        # make per-plane frequencies learnable
     grape_share_across_heads: bool = True    # share the spectrum across heads (RoPE-like)
+    grape_log_freq_scale: float = 16.0       # scale log_freq to reduce its effective lr (learnable only)
 
     def __init__(self, **kwargs):
         super().__init__(**kwargs)
@@ -335,27 +342,10 @@ class GPT(PreTrainedModel):
         # weight tying
         self.transformer.wte.weight = self.lm_head.weight
 
-        # Initialize shared embedding/LM head weights
-        init_std = getattr(config, 'embedding_init_std', 0.02)
-        with torch.no_grad():
-            self.lm_head.weight.normal_(mean=0.0, std=init_std)
-
         # Final RMSNorm
-        self.ln_f = RMSNorm(config.n_embd, use_fp32=config.use_fp32_rmsnorm)
+        self.ln_f = RMSNorm(config.n_embd)
 
-        # Initialize all hidden (>=2D) parameters with normal_(0, hidden_init_std)
-        hidden_std = getattr(config, 'hidden_init_std_factor', 0.5) / math.sqrt(config.n_embd)
-        with torch.no_grad():
-            for name, p in self.named_parameters():
-                if p.dim() >= 2:
-                    if (
-                        name.endswith('attn.c_proj.weight') or
-                        name.endswith('mlp.c_proj.weight') or
-                        name == 'transformer.wte.weight' or
-                        name == 'lm_head.weight'
-                    ):
-                        continue
-                    p.normal_(mean=0.0, std=hidden_std)
+        init_llama_mha_weights(self, config)
 
     def forward(self, idx, targets=None, return_logits=True, output_all_seq=False):
         x = self.transformer.wte(idx)  # (B, T, n_embd)

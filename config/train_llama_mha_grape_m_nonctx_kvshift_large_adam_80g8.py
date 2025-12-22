@@ -1,3 +1,6 @@
+# file: config/train_llama_mha_grape_nonctx_type1_large_adam_80g8.py
+# Large LLaMA-MHA + non-contextual MS-GRAPE (commuting) config
+
 import time
 import os
 from datetime import datetime
@@ -13,12 +16,21 @@ n_embd = 1280
 head_dim = 128
 dropout = 0.0
 bias = False
-using_groupnorm = False  # Enable Group Layernorm
-use_qk_rmsnorm = True    # Apply learnable RMSNorm to Q and K
-# Embedding init (normal std)
+using_groupnorm = False             # Optional per-head RMSNorm on attn outputs
+use_qk_rmsnorm = True               # Apply learnable RMSNorm to Q and K
+
+# --- MS-GRAPE (commuting) knobs ---
+grape_base = 10000.0               # RoPE base for log-uniform init
+grape_learnable_freq = True        # frequencies are trainable
+grape_share_across_heads = True    # share the spectrum across heads (RoPE-like)
+
+# Embedding and hidden init
 embedding_init_std = 0.02
-# Hidden weights init factor (all >=2D tensors), actual std = factor / sqrt(n_embd)
 hidden_init_std_factor = 0.5
+
+# KV shifting
+use_k_shift = True
+use_v_shift = True
 
 # Training configs
 batch_size = 15
@@ -44,4 +56,5 @@ schedule = 'cosine'
 
 # System configs
 compile = True
-model_type = 'llama-mha-rope'
+model_type = 'llama-mha-grape-m-nonctx'
+

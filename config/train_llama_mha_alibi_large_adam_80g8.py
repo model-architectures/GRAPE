@@ -4,7 +4,7 @@ from datetime import datetime
 
 # Wandb configs
 wandb_log = True
-wandb_project = 'nanogpt-grape'
+wandb_project = 'nanogpt-next'
 
 # Model configs
 n_layer = 36
@@ -14,7 +14,7 @@ head_dim = 128
 dropout = 0.0
 bias = False
 using_groupnorm = False  # Enable Group Layernorm
-use_fp32_rmsnorm = True  # Cast to fp32 inside RMSNorm (default)
+use_qk_rmsnorm = True    # Apply learnable RMSNorm to Q and K
 # Embedding init (normal std)
 embedding_init_std = 0.02
 # Hidden weights init factor (all >=2D tensors), actual std = factor / sqrt(n_embd)
@@ -32,14 +32,14 @@ log_interval = 10
 
 # Optimizer configs
 optimizer_name = 'adamw'
-learning_rate = 2e-4
-weight_decay = 1e-1
+learning_rate = 1e-3
+weight_decay = 0.01
 beta1 = 0.9
 beta2 = 0.95
 grad_clip = 1.0
 decay_lr = True
 warmup_iters = 2000
-min_lr = 1e-5
+min_lr = 3e-5
 schedule = 'cosine'
 
 # System configs

@@ -8,7 +8,7 @@
 # Implementation details:
 # * g(·) is a lightweight linear gate with Softplus to enforce ω_t ≥ 0.
 # * We initialize g to produce small ω (~1e-3) so the model starts near non-contextual RoPE.
-# * cos/sin are computed per-(B,T,H) because Φ depends on the input; values cached in bf16.
+# * cos/sin are computed per-(B,T,H) because Φ depends on the input; values cached in fp32.
 # * Drop-in for llama-mha.py: only the positional module differs.
 
 import math
@@ -18,6 +18,10 @@ import torch.nn as nn
 import torch.nn.functional as F
 from transformers.configuration_utils import PretrainedConfig
 from transformers.modeling_utils import PreTrainedModel
+
+from .rmsnorm import RMSNorm
+from .kv_shift import ShiftLinear
+from .init_utils import init_llama_mha_weights
 
 # -----------------------------------------------------------------------------
 # Helpers
@@ -59,7 +63,7 @@ class MSGRAPEContextType1(nn.Module):
         base: float = 10000.0,
         learnable_freq: bool = True,
         share_freq_across_heads: bool = True,
-        cache_dtype: torch.dtype = torch.bfloat16,
+        cache_dtype: torch.dtype = torch.float32,
     ):
         super().__init__()
         assert head_dim % 2 == 0, "head_dim must be even for planar rotations"
@@ -73,7 +77,7 @@ class MSGRAPEContextType1(nn.Module):
 
         # RoPE-style initialization: θ_j = 1 / base**(2j/D)
         inv_freq = 1.0 / (self.base ** (torch.arange(0, head_dim, 2).float() / head_dim))  # (D/2,)
-        log_init = inv_freq.log()
+        log_init = inv_freq.log().float()
 
         if share_freq_across_heads:
             self.log_freq = nn.Parameter(log_init, requires_grad=learnable_freq)           # (D/2,)
@@ -81,13 +85,23 @@ class MSGRAPEContextType1(nn.Module):
             self.log_freq = nn.Parameter(log_init.unsqueeze(0).repeat(n_head, 1),
                                          requires_grad=learnable_freq)                    # (H, D/2)
 
+    def _apply(self, fn):
+        # Keep log_freq in fp32 regardless of module-wide dtype casts.
+        super()._apply(fn)
+        if getattr(self, "log_freq", None) is not None:
+            self.log_freq.data = self.log_freq.data.float()
+            if self.log_freq.grad is not None:
+                self.log_freq.grad.data = self.log_freq.grad.data.float()
+        return self
+
     @property
     def freq(self):
         """Positive per-plane frequencies θ_j; shape (H, D/2)."""
+        scaled_log_freq = self.log_freq
         if self.share_freq_across_heads:
-            return torch.exp(self.log_freq).unsqueeze(0).expand(self.n_head, self.d_half)
+            return torch.exp(scaled_log_freq).unsqueeze(0).expand(self.n_head, self.d_half)
         else:
-            return torch.exp(self.log_freq)
+            return torch.exp(scaled_log_freq)
 
     def cos_sin_from_phi(self, phi: torch.Tensor):
         """
@@ -130,31 +144,6 @@ class MSGRAPEContextType1(nn.Module):
 # -----------------------------------------------------------------------------
 # RMSNorm, MLP, Attention, Blocks (drop-in; attention now computes Φ_t)
 
-class RMSNorm(nn.Module):
-    def __init__(self, dim: int, eps: float = 1e-5, elementwise_affine=True, use_fp32: bool = True):
-        super().__init__()
-        self.dim = dim
-        self.eps = eps
-        self.elementwise_affine = elementwise_affine
-        self.use_fp32 = use_fp32
-        if self.elementwise_affine:
-            self.weight = nn.Parameter(torch.ones(dim))
-        else:
-            self.register_parameter('weight', None)
-
-    def _norm(self, x):
-        return x * torch.rsqrt(x.pow(2).mean(-1, keepdim=True) + self.eps)
-
-    def forward(self, x):
-        out = self._norm(x.float() if self.use_fp32 else x)
-        if self.weight is not None:
-            out = out * (self.weight.float() if self.use_fp32 else self.weight)
-        return out.type_as(x) if self.use_fp32 else out
-
-    def extra_repr(self) -> str:
-        return f'dim={self.dim}, eps={self.eps}, elementwise_affine={self.elementwise_affine}'
-
-
 class CausalSelfAttention(nn.Module):
     def __init__(self, config):
         super().__init__()
@@ -165,8 +154,16 @@ class CausalSelfAttention(nn.Module):
 
         # QKV projections
         self.c_q = nn.Linear(self.n_embd, self.n_head * self.head_dim, bias=False)
-        self.c_k = nn.Linear(self.n_embd, self.n_head * self.head_dim, bias=False)
-        self.c_v = nn.Linear(self.n_embd, self.n_head * self.head_dim, bias=False)
+        self.use_k_shift = getattr(config, "use_k_shift", False)
+        self.use_v_shift = getattr(config, "use_v_shift", False)
+        if self.use_k_shift:
+            self.c_k = ShiftLinear(self.n_embd, self.n_head * self.head_dim, self.n_head, bias=False)
+        else:
+            self.c_k = nn.Linear(self.n_embd, self.n_head * self.head_dim, bias=False)
+        if self.use_v_shift:
+            self.c_v = ShiftLinear(self.n_embd, self.n_head * self.head_dim, self.n_head, bias=False)
+        else:
+            self.c_v = nn.Linear(self.n_embd, self.n_head * self.head_dim, bias=False)
         # Output projection
         self.c_proj = nn.Linear(self.n_head * self.head_dim, self.n_embd, bias=False)
         with torch.no_grad():
@@ -181,13 +178,19 @@ class CausalSelfAttention(nn.Module):
             base=getattr(config, 'grape_base', 10000.0),
             learnable_freq=getattr(config, 'grape_learnable_freq', True),
             share_freq_across_heads=getattr(config, 'grape_share_across_heads', True),
-            cache_dtype=torch.bfloat16,
+            cache_dtype=torch.float32,
         )
 
         # Phase gate ω_t = softplus(Wx+b)  (scalar per token by default; can be per-head if enabled)
         self.grape_ctx_per_head = getattr(config, 'grape_ctx_per_head', False)
         out_dim = self.n_head if self.grape_ctx_per_head else 1
         self.omega_proj = nn.Linear(self.n_embd, out_dim, bias=True)
+        ctx_omega_scale = getattr(config, "grape_ctx_omega_scale", None)
+        if ctx_omega_scale is None:
+            ctx_omega_scale = getattr(config, "grape_log_freq_scale", 16.0)
+        self.ctx_omega_scale = float(ctx_omega_scale)
+        if self.ctx_omega_scale <= 0:
+            raise ValueError("grape_ctx_omega_scale must be > 0")
 
         # Initialize gate near zero increments (e.g., ~1e-3) so training begins close to non-contextual.
         init_omega = max(getattr(config, 'grape_ctx_init_omega', 1e-3), 1e-8)
@@ -198,13 +201,13 @@ class CausalSelfAttention(nn.Module):
         # QK RMSNorm
         self.use_qk_rmsnorm = getattr(config, 'use_qk_rmsnorm', True)
         if self.use_qk_rmsnorm:
-            self.q_rms = RMSNorm(self.head_dim, eps=1e-5, elementwise_affine=True, use_fp32=config.use_fp32_rmsnorm)
-            self.k_rms = RMSNorm(self.head_dim, eps=1e-5, elementwise_affine=True, use_fp32=config.use_fp32_rmsnorm)
+            self.q_rms = RMSNorm(self.head_dim, eps=1e-5, elementwise_affine=True)
+            self.k_rms = RMSNorm(self.head_dim, eps=1e-5, elementwise_affine=True)
 
         # Optional per-head RMSNorm on attn outputs
         self.using_groupnorm = getattr(config, 'using_groupnorm', False)
         if self.using_groupnorm:
-            self.subln = RMSNorm(self.head_dim, eps=1e-5, elementwise_affine=True, use_fp32=config.use_fp32_rmsnorm)
+            self.subln = RMSNorm(self.head_dim, eps=1e-5, elementwise_affine=True)
 
     def _cumulative_phase(self, x: torch.Tensor) -> torch.Tensor:
         """
@@ -213,7 +216,7 @@ class CausalSelfAttention(nn.Module):
             (B,T,1) if grape_ctx_per_head=False,
             (B,T,H) if grape_ctx_per_head=True.
         """
-        omega = F.softplus(self.omega_proj(x))  # (B,T,1 or H), ω_t ≥ 0
+        omega = F.sigmoid(self.omega_proj(x).float() / self.ctx_omega_scale)  # (B,T,1 or H), ω_t ≥ 0
         # exclusive cumsum along time: cumsum - current
         phi = torch.cumsum(omega, dim=1) - omega
         return phi
@@ -226,8 +229,14 @@ class CausalSelfAttention(nn.Module):
 
         # QKV
         q = self.c_q(x).view(B, T, self.n_head, self.head_dim)
-        k = self.c_k(x).view(B, T, self.n_head, self.head_dim)
-        v = self.c_v(x).view(B, T, self.n_head, self.head_dim)
+        if self.use_k_shift:
+            k = self.c_k(x, None).view(B, T, self.n_head, self.head_dim)
+        else:
+            k = self.c_k(x).view(B, T, self.n_head, self.head_dim)
+        if self.use_v_shift:
+            v = self.c_v(x, None).view(B, T, self.n_head, self.head_dim)
+        else:
+            v = self.c_v(x).view(B, T, self.n_head, self.head_dim)
 
         # Apply contextual GRAPE rotations to Q and K
         q, k = self.grape.rotate(q, k, phi)
@@ -277,8 +286,8 @@ class Block(nn.Module):
         super().__init__()
         self.attn = CausalSelfAttention(config)
         self.mlp = MLP(config)
-        self.ln_1 = RMSNorm(config.n_embd, use_fp32=config.use_fp32_rmsnorm)
-        self.ln_2 = RMSNorm(config.n_embd, use_fp32=config.use_fp32_rmsnorm)
+        self.ln_1 = RMSNorm(config.n_embd)
+        self.ln_2 = RMSNorm(config.n_embd)
 
     def forward(self, x):
         x = x + self.attn(self.ln_1(x))
@@ -302,8 +311,9 @@ class GPTConfig(PretrainedConfig):
     dropout: float = 0.0
     scale_attn_by_inverse_layer_idx: bool = False
     using_groupnorm: bool = False
-    use_fp32_rmsnorm: bool = True
     use_qk_rmsnorm: bool = True
+    use_k_shift: bool = False
+    use_v_shift: bool = False
 
     # Initializations
     embedding_init_std: float = 0.02
@@ -317,6 +327,7 @@ class GPTConfig(PretrainedConfig):
     # --- Context gate knobs ---
     grape_ctx_per_head: bool = False   # Type-I: scalar Φ by default; set True to make Φ per-head
     grape_ctx_init_omega: float = 1e-3 # initial ω_t via softplus-inverse(bias)
+    grape_ctx_omega_scale: float = 16.0 # scale on omega logits; replaces grape_log_freq_scale
 
     def __init__(self, **kwargs):
         super().__init__(**kwargs)
@@ -345,27 +356,10 @@ class GPT(PreTrainedModel):
         # weight tying
         self.transformer.wte.weight = self.lm_head.weight
 
-        # Initialize shared embedding/LM head weights
-        init_std = getattr(config, 'embedding_init_std', 0.02)
-        with torch.no_grad():
-            self.lm_head.weight.normal_(mean=0.0, std=init_std)
-
         # Final RMSNorm
-        self.ln_f = RMSNorm(config.n_embd, use_fp32=config.use_fp32_rmsnorm)
+        self.ln_f = RMSNorm(config.n_embd)
 
-        # Hidden param init (>=2D tensors) with reduced std, excluding special weights
-        hidden_std = getattr(config, 'hidden_init_std_factor', 0.5) / math.sqrt(config.n_embd)
-        with torch.no_grad():
-            for name, p in self.named_parameters():
-                if p.dim() >= 2:
-                    if (
-                        name.endswith('attn.c_proj.weight') or
-                        name.endswith('mlp.c_proj.weight') or
-                        name == 'transformer.wte.weight' or
-                        name == 'lm_head.weight'
-                    ):
-                        continue
-                    p.normal_(mean=0.0, std=hidden_std)
+        init_llama_mha_weights(self, config, exclude_suffixes=("omega_proj.weight",))
 
     def forward(self, idx, targets=None, return_logits=True, output_all_seq=False):
         x = self.transformer.wte(idx)  # (B, T, n_embd)

@@ -4,7 +4,7 @@ from datetime import datetime
 
 # Wandb configs
 wandb_log = True
-wandb_project = 'nanogpt-grape'
+wandb_project = 'nanogpt-next'
 
 # Model configs
 n_layer = 24
@@ -13,16 +13,25 @@ n_embd = 1024
 head_dim = 128
 dropout = 0.0
 bias = False
-using_groupnorm = False  # Enable Group Layernorm on attn outputs
-use_fp32_rmsnorm = True  # Cast to fp32 inside RMSNorm
+using_groupnorm = False  # Enable Group Layernorm
 use_qk_rmsnorm = True    # Apply learnable RMSNorm to Q and K
-# Disable K/V shift by default for speed (can override via CLI)
-use_k_shift = False
-use_v_shift = False
+
+# GRAPE-A (query+key-gated additive) knobs
+# If None, ω is initialized with ALiBi-style per-head slopes.
+querykeygated_omega_init = None
+keygated_u_l2_norm = True
+keygated_u_l2_eps = 1e-6
+querygated_v_l2_norm = True
+querygated_v_l2_eps = 1e-6
+
 # Embedding init (normal std)
 embedding_init_std = 0.02
 # Hidden weights init factor (all >=2D tensors), actual std = factor / sqrt(n_embd)
 hidden_init_std_factor = 0.5
+
+# KV shifting
+use_k_shift = True
+use_v_shift = True
 
 # Training configs
 batch_size = 20
@@ -36,8 +45,8 @@ log_interval = 10
 
 # Optimizer configs
 optimizer_name = 'adamw'
-learning_rate = 6e-4
-weight_decay = 1e-1
+learning_rate = 1e-3
+weight_decay = 0.01
 beta1 = 0.9
 beta2 = 0.95
 grad_clip = 1.0
@@ -48,4 +57,5 @@ schedule = 'cosine'
 
 # System configs
 compile = True
-model_type = 'fox'
+model_type = 'llama-mha-grape-a-querykeygated'
+

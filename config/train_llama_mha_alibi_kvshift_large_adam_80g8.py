@@ -19,6 +19,9 @@ use_qk_rmsnorm = True    # Apply learnable RMSNorm to Q and K
 embedding_init_std = 0.02
 # Hidden weights init factor (all >=2D tensors), actual std = factor / sqrt(n_embd)
 hidden_init_std_factor = 0.5
+# KV shifting
+use_k_shift = True
+use_v_shift = True
 
 # Training configs
 batch_size = 15
@@ -44,4 +47,4 @@ schedule = 'cosine'
 
 # System configs
 compile = True
-model_type = 'llama-mha-rope'
+model_type = 'llama-mha-alibi'
