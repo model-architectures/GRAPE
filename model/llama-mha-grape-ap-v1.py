@@ -11,6 +11,10 @@ from transformers import PreTrainedModel
 from transformers.configuration_utils import PretrainedConfig
 from transformers.modeling_utils import PreTrainedModel
 
+from .rmsnorm import RMSNorm
+from .kv_shift import ShiftLinear
+from .init_utils import init_llama_mha_weights
+
 
 class Rotary(torch.nn.Module):
 
@@ -27,8 +31,8 @@ class Rotary(torch.nn.Module):
             self.seq_len_cached = seq_len
             t = torch.arange(seq_len, device=x.device).type_as(self.inv_freq)
             freqs = torch.outer(t, self.inv_freq).to(x.device)
-            self.cos_cached = freqs.cos().bfloat16()
-            self.sin_cached = freqs.sin().bfloat16()
+            self.cos_cached = freqs.cos().float()
+            self.sin_cached = freqs.sin().float()
         return self.cos_cached[None, :, None, :], self.sin_cached[None, :, None, :]
 
 def apply_rotary_emb(x, cos, sin):
@@ -56,36 +60,6 @@ def _get_alibi_slopes(n_heads: int):
         slopes += extra[0::2][: n_heads - closest_power_of_2]
         return slopes
     
-class RMSNorm(nn.Module):
-    def __init__(self, dim: int, eps: float = 1e-5, elementwise_affine=True, use_fp32: bool = True):
-        super().__init__()
-        self.dim = dim
-        self.eps = eps
-        self.elementwise_affine = elementwise_affine
-        self.use_fp32 = use_fp32
-        if self.elementwise_affine:
-            self.weight = nn.Parameter(torch.ones(dim))
-        else:
-            self.register_parameter('weight', None)
-
-    def _norm(self, x):
-        return x * torch.rsqrt(x.pow(2).mean(-1, keepdim=True) + self.eps)
-
-    def forward(self, x):
-        if self.use_fp32:
-            output = self._norm(x.float())
-        else:
-            output = self._norm(x)
-        if self.weight is not None:
-            if self.use_fp32:
-                output = output * self.weight.float()
-            else:
-                output = output * self.weight
-        return output.type_as(x) if self.use_fp32 else output
-
-    def extra_repr(self) -> str:
-        return f'dim={self.dim}, eps={self.eps}, elementwise_affine={self.elementwise_affine}'
-
 class CausalSelfAttention(nn.Module):
 
     def __init__(self, config):
@@ -129,8 +103,16 @@ class CausalSelfAttention(nn.Module):
                 self.p_head_dim = config_p_head_dim
         # projections to per-head dims
         self.c_q = nn.Linear(self.n_embd, self.n_head * self.head_dim, bias=False)
-        self.c_k = nn.Linear(self.n_embd, self.n_head * self.head_dim, bias=False)
-        self.c_v = nn.Linear(self.n_embd, self.n_head * self.head_dim, bias=False)
+        self.use_k_shift = getattr(config, "use_k_shift", False)
+        self.use_v_shift = getattr(config, "use_v_shift", False)
+        if self.use_k_shift:
+            self.c_k = ShiftLinear(self.n_embd, self.n_head * self.head_dim, self.n_head, bias=False)
+        else:
+            self.c_k = nn.Linear(self.n_embd, self.n_head * self.head_dim, bias=False)
+        if self.use_v_shift:
+            self.c_v = ShiftLinear(self.n_embd, self.n_head * self.head_dim, self.n_head, bias=False)
+        else:
+            self.c_v = nn.Linear(self.n_embd, self.n_head * self.head_dim, bias=False)
         # GRAPE positional projection p (unused when tying to q/k/v)
         self.c_p = None if self.p_is_tied else nn.Linear(self.n_embd, self.n_head * self.p_head_dim, bias=False)
         # output projection back to embedding dim
@@ -153,17 +135,23 @@ class CausalSelfAttention(nn.Module):
         # QK RMSNorm (learnable) flag and layers
         self.use_qk_rmsnorm = getattr(config, 'use_qk_rmsnorm', True)
         if self.use_qk_rmsnorm:
-            self.q_rms = RMSNorm(self.head_dim, eps=1e-5, elementwise_affine=True, use_fp32=config.use_fp32_rmsnorm)
-            self.k_rms = RMSNorm(self.head_dim, eps=1e-5, elementwise_affine=True, use_fp32=config.use_fp32_rmsnorm)
+            self.q_rms = RMSNorm(self.head_dim, eps=1e-5, elementwise_affine=True)
+            self.k_rms = RMSNorm(self.head_dim, eps=1e-5, elementwise_affine=True)
         if self.using_groupnorm:
             # Apply RMSNorm to each head's output dimension
-            self.subln = RMSNorm(self.head_dim, eps=1e-5, elementwise_affine=True, use_fp32=config.use_fp32_rmsnorm)
+            self.subln = RMSNorm(self.head_dim, eps=1e-5, elementwise_affine=True)
 
     def forward(self, x):
         B, T, C = x.size()
         q = self.c_q(x).view(B, T, self.n_head, self.head_dim)
-        k = self.c_k(x).view(B, T, self.n_head, self.head_dim)
-        v = self.c_v(x).view(B, T, self.n_head, self.head_dim)
+        if self.use_k_shift:
+            k = self.c_k(x, None).view(B, T, self.n_head, self.head_dim)
+        else:
+            k = self.c_k(x).view(B, T, self.n_head, self.head_dim)
+        if self.use_v_shift:
+            v = self.c_v(x, None).view(B, T, self.n_head, self.head_dim)
+        else:
+            v = self.c_v(x).view(B, T, self.n_head, self.head_dim)
         p = None if self.c_p is None else self.c_p(x).view(B, T, self.n_head, self.p_head_dim)
 
         if self.use_qk_rmsnorm:
@@ -188,20 +176,21 @@ class CausalSelfAttention(nn.Module):
 
         # compute additive attention bias
         scale_factor = 1.0 / p.size(-1)
-        attn_bias = torch.log(torch.sigmoid(torch.matmul(p, p_rot.transpose(-2, -1)) * scale_factor))
+        attn_bias = F.logsigmoid((torch.matmul(p, p_rot.transpose(-2, -1)) * scale_factor).float())
         attn_bias = attn_bias * self.slopes.to(device=q.device, dtype=attn_bias.dtype)  # (B, H, T, T)
         temp_mask = torch.ones(T, T, dtype=torch.bool, device=q.device).tril(diagonal=0)
         attn_bias = attn_bias.masked_fill(~temp_mask, 0.0)
         attn_bias_sum = attn_bias.sum(dim=-1, keepdim=True)
         attn_bias = (attn_bias_sum - attn_bias.cumsum(dim=-1))
-        attn_bias = attn_bias.masked_fill(~temp_mask, float("-inf")).to(dtype=q.dtype)
+        attn_bias = attn_bias.masked_fill(~temp_mask, float("-inf"))
 
+        # SDPA ignores attn_mask when is_causal=True; attn_bias already includes causal mask.
         y = F.scaled_dot_product_attention(
             q.transpose(1, 2),
             k.transpose(1, 2),
             v.transpose(1, 2),
             attn_mask=attn_bias,
-            is_causal=True,
+            is_causal=False,
         )
 
         if self.using_groupnorm:
@@ -249,8 +238,8 @@ class Block(nn.Module):
         super().__init__()
         self.attn = CausalSelfAttention(config)
         self.mlp = MLP(config)
-        self.ln_1 = RMSNorm(config.n_embd, use_fp32=config.use_fp32_rmsnorm)
-        self.ln_2 = RMSNorm(config.n_embd, use_fp32=config.use_fp32_rmsnorm)
+        self.ln_1 = RMSNorm(config.n_embd)
+        self.ln_2 = RMSNorm(config.n_embd)
 
     def forward(self, x):
         x = x + self.attn(self.ln_1(x))
@@ -273,8 +262,9 @@ class GPTConfig(PretrainedConfig):
     dropout: float = 0.0  # Dropout rate
     scale_attn_by_inverse_layer_idx: bool = False  # Scale attention by 1/sqrt(layer_idx)
     using_groupnorm: bool = False  # Whether to use Group Layernorm
-    use_fp32_rmsnorm: bool = True  # Cast to fp32 inside RMSNorm by default
     use_qk_rmsnorm: bool = True  # Apply learnable RMSNorm to Q and K in attention
+    use_k_shift: bool = False
+    use_v_shift: bool = False
     p_tie_mode: str = 'none'  # Options: 'none', 'pqtie', 'pktie', 'pvtie' (alias 'pq'/'pk'/'pv' -> '*tie')
     p_head_dim: Optional[int] = None  # Per-head dim for learnable P projection when not tied
     # Embedding init std (normal init for tied token embedding / LM head)
@@ -307,27 +297,8 @@ class GPT(PreTrainedModel):
         ))
         self.lm_head = nn.Linear(config.n_embd, config.vocab_size, bias=False)
         self.transformer.wte.weight = self.lm_head.weight # https://paperswithcode.com/method/weight-tying
-        # initialize the shared embedding/LM head weights with normal_(0, std)
-        init_std = getattr(config, 'embedding_init_std', 0.02)
-        with torch.no_grad():
-            self.lm_head.weight.normal_(mean=0.0, std=init_std)
-        self.ln_f = RMSNorm(config.n_embd, use_fp32=config.use_fp32_rmsnorm)
-
-        # Initialize all hidden (>=2D) parameters with normal_(0, hidden_init_std)
-        # where hidden_init_std = hidden_init_std_factor / sqrt(n_embd).
-        # Excludes tied embedding/LM head weights and specially-initialized c_proj weights.
-        hidden_std = getattr(config, 'hidden_init_std_factor', 0.5) / math.sqrt(config.n_embd)
-        with torch.no_grad():
-            for name, p in self.named_parameters():
-                if p.dim() >= 2:
-                    if (
-                        name.endswith('attn.c_proj.weight') or
-                        name.endswith('mlp.c_proj.weight') or
-                        name == 'transformer.wte.weight' or
-                        name == 'lm_head.weight'
-                    ):
-                        continue
-                    p.normal_(mean=0.0, std=hidden_std)
+        self.ln_f = RMSNorm(config.n_embd)
+        init_llama_mha_weights(self, config)
 
     def forward(self, idx, targets=None, return_logits=True, output_all_seq=False):
 

@@ -29,6 +29,10 @@ grape_share_across_heads = True    # share the spectrum across heads (RoPE-like)
 embedding_init_std = 0.02
 hidden_init_std_factor = 0.5
 
+# KV shifting
+use_k_shift = True
+use_v_shift = True
+
 # Training configs
 batch_size = 20
 block_size = 4096
@@ -54,3 +58,4 @@ schedule = 'cosine'
 # System configs
 compile = True
 model_type = 'llama-mha-grape-m-nonctx'
+

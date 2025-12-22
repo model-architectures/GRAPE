@@ -1,5 +1,5 @@
-# file: config/train_llama_mha_grape_ctx_type1_medium_adam_80g8.py
-# Medium LLaMA-MHA + Contextual GRAPE Type-I (Phase-Modulated) config
+# file: config/train_llama_mha_grape_ctx_type1_large_adam_80g8.py
+# Large LLaMA-MHA + Contextual GRAPE Type-I (Phase-Modulated) config
 
 import time
 import os
@@ -10,9 +10,9 @@ wandb_log = True
 wandb_project = 'nanogpt-next'
 
 # Model configs
-n_layer = 24
-n_head = 8
-n_embd = 1024
+n_layer = 36
+n_head = 10
+n_embd = 1280
 head_dim = 128
 dropout = 0.0
 bias = False
@@ -32,8 +32,12 @@ grape_ctx_init_omega = 1e-3       # small initial ω_t
 embedding_init_std = 0.02
 hidden_init_std_factor = 0.5
 
+# KV shifting
+use_k_shift = True
+use_v_shift = True
+
 # Training configs
-batch_size = 20
+batch_size = 15
 block_size = 4096
 gradient_accumulation_steps = 60 // batch_size
 max_iters = 100000
@@ -57,3 +61,4 @@ schedule = 'cosine'
 # System configs
 compile = True
 model_type = 'llama-mha-grape-m-ctx'
+

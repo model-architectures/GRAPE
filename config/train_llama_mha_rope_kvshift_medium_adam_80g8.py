@@ -7,9 +7,9 @@ wandb_log = True
 wandb_project = 'nanogpt-next'
 
 # Model configs
-n_layer = 36
-n_head = 10
-n_embd = 1280
+n_layer = 24
+n_head = 8
+n_embd = 1024
 head_dim = 128
 dropout = 0.0
 bias = False
@@ -19,9 +19,12 @@ use_qk_rmsnorm = True    # Apply learnable RMSNorm to Q and K
 embedding_init_std = 0.02
 # Hidden weights init factor (all >=2D tensors), actual std = factor / sqrt(n_embd)
 hidden_init_std_factor = 0.5
+# KV shifting
+use_k_shift = True
+use_v_shift = True
 
 # Training configs
-batch_size = 15
+batch_size = 20
 block_size = 4096
 gradient_accumulation_steps = 60 // batch_size
 max_iters = 100000

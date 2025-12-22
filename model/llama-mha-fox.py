@@ -1,5 +1,5 @@
 # For comparison
-# LlaMA using SwiGLU, learnable RMSNorm, and ALiBi positional bias
+# LlaMA using SwiGLU, learnable RMSNorm, and Fox forgetting attention
 
 import torch
 import torch.nn as nn
@@ -10,52 +10,8 @@ from transformers.configuration_utils import PretrainedConfig
 from transformers.modeling_utils import PreTrainedModel
 
 from .rmsnorm import RMSNorm
-from .kv_shift import ShiftLinear
+from .fox import ForgettingAttentionLayer
 from .init_utils import init_llama_mha_weights
-
-
-def _get_alibi_slopes(n_heads: int):
-    """Return head-wise slopes for ALiBi as in the paper implementation.
-
-    This follows the commonly used recipe that yields a set of decreasing
-    geometric slopes across heads, and extends to non-powers-of-two by
-    interleaving from the next power-of-two set.
-    """
-    def get_slopes_power_of_2(n):
-        start = 2 ** (-2 ** -(math.log2(n) - 3))
-        ratio = start
-        return [start * (ratio ** i) for i in range(n)]
-
-    if math.log2(n_heads).is_integer():
-        return get_slopes_power_of_2(n_heads)
-    else:
-        closest_power_of_2 = 2 ** math.floor(math.log2(n_heads))
-        slopes = get_slopes_power_of_2(closest_power_of_2)
-        extra = _get_alibi_slopes(2 * closest_power_of_2)
-        slopes += extra[0::2][: n_heads - closest_power_of_2]
-        return slopes
-
-
-class AlibiBias(nn.Module):
-    def __init__(self, n_heads: int):
-        super().__init__()
-        slopes = torch.tensor(_get_alibi_slopes(n_heads), dtype=torch.float32).view(1, n_heads, 1, 1)
-        self.register_buffer("slopes", slopes, persistent=False)
-        self.seq_len_cached = None
-        self.bias_cached = None
-
-    def forward(self, x):
-        # x is (B, T, H, D) or (B, T, C)
-        T = x.shape[1]
-        if T != self.seq_len_cached or self.bias_cached is None or self.bias_cached.device != x.device:
-            self.seq_len_cached = T
-            arange = torch.arange(T, device=x.device)
-            # dist[i, j] = i - j; clamp future (j>i) to 0 since is_causal will mask anyway
-            dist = (arange.view(T, 1) - arange.view(1, T)).clamp_min(0).to(dtype=self.slopes.dtype)
-            # bias shape: (1, H, T, T)
-            bias = -dist.view(1, 1, T, T) * self.slopes.to(device=x.device)
-            self.bias_cached = bias
-        return self.bias_cached
 
 
 class CausalSelfAttention(nn.Module):
@@ -64,72 +20,48 @@ class CausalSelfAttention(nn.Module):
         self.n_head = config.n_head
         self.n_embd = config.n_embd
         self.head_dim = config.head_dim
-        self.use_k_shift = getattr(config, "use_k_shift", False)
-        self.use_v_shift = getattr(config, "use_v_shift", False)
-        self.c_q = nn.Linear(self.n_embd, self.n_head * self.head_dim, bias=False)
-        if self.use_k_shift:
-            self.c_k = ShiftLinear(self.n_embd, self.n_head * self.head_dim, self.n_head, bias=False)
-        else:
-            self.c_k = nn.Linear(self.n_embd, self.n_head * self.head_dim, bias=False)
-        if self.use_v_shift:
-            self.c_v = ShiftLinear(self.n_embd, self.n_head * self.head_dim, self.n_head, bias=False)
-        else:
-            self.c_v = nn.Linear(self.n_embd, self.n_head * self.head_dim, bias=False)
-        # output projection back to embedding dim
-        self.c_proj = nn.Linear(self.n_head * self.head_dim, self.n_embd, bias=False)
+        self.use_k_shift = getattr(config, 'use_k_shift', False)
+        self.use_v_shift = getattr(config, 'use_v_shift', False)
+
+        self.core = ForgettingAttentionLayer(
+            hidden_size=self.n_embd,
+            num_heads=self.n_head,
+            num_kv_heads=getattr(config, "num_kv_heads", None),
+            window_size=getattr(config, "window_size", None),
+            max_position_embeddings=getattr(config, "block_size", None),
+            use_rope=getattr(config, "use_rope", False),
+            rope_base=getattr(config, "rope_base", 10000.0),
+            use_output_gate=getattr(config, "use_output_gate", False),
+            ogate_act=getattr(config, "ogate_act", "sigmoid"),
+            fgate_type=getattr(config, "fgate_type", "full"),
+            fgate_bias_init=getattr(config, "fgate_bias_init", False),
+            decay_time_min=getattr(config, "decay_time_min", None),
+            decay_time_max=getattr(config, "decay_time_max", None),
+            use_output_norm=config.using_groupnorm,
+            norm_eps=1e-5,
+            qk_norm=getattr(config, "use_qk_rmsnorm", True),
+            qk_norm_share_param_across_head=True,
+            use_k_shift=self.use_k_shift,
+            use_v_shift=self.use_v_shift,
+            layer_idx=None,
+        )
+
         # initialize attn output proj with reduced std: factor/sqrt(n_embd)/sqrt(layers)
         with torch.no_grad():
             factor = getattr(config, 'hidden_init_std_factor', 0.5)
             std = factor / math.sqrt(config.n_embd) / math.sqrt(config.n_layer)
-            self.c_proj.weight.normal_(mean=0.0, std=std)
-        self.alibi = AlibiBias(self.n_head)
-        self.using_groupnorm = config.using_groupnorm
-        # QK RMSNorm (learnable) flag and layers
-        self.use_qk_rmsnorm = getattr(config, 'use_qk_rmsnorm', True)
-        if self.use_qk_rmsnorm:
-            self.q_rms = RMSNorm(self.head_dim, eps=1e-5, elementwise_affine=True)
-            self.k_rms = RMSNorm(self.head_dim, eps=1e-5, elementwise_affine=True)
-        if self.using_groupnorm:
-            # Apply RMSNorm to each head's output dimension
-            self.subln = RMSNorm(self.head_dim, eps=1e-5, elementwise_affine=True)
+            if hasattr(self.core, 'c_proj') and hasattr(self.core.c_proj, 'weight'):
+                self.core.c_proj.weight.normal_(mean=0.0, std=std)
 
     def forward(self, x):
-        B, T, C = x.size()
-        q = self.c_q(x).view(B, T, self.n_head, self.head_dim)
-        if self.use_k_shift:
-            k = self.c_k(x, None).view(B, T, self.n_head, self.head_dim)
-        else:
-            k = self.c_k(x).view(B, T, self.n_head, self.head_dim)
-        if self.use_v_shift:
-            v = self.c_v(x, None).view(B, T, self.n_head, self.head_dim)
-        else:
-            v = self.c_v(x).view(B, T, self.n_head, self.head_dim)
-
-        # ALiBi additive bias, broadcastable to (B, H, T, T)
-        alibi = self.alibi(q).float()
-        # SDPA ignores attn_mask when is_causal=True, so bake causal mask into bias.
-        causal_mask = torch.ones(T, T, dtype=torch.bool, device=alibi.device).tril(diagonal=0)
-        alibi = alibi.masked_fill(~causal_mask, float("-inf"))
-
-        if self.use_qk_rmsnorm:
-            q = self.q_rms(q)
-            k = self.k_rms(k)
-
-        y = F.scaled_dot_product_attention(
-            q.transpose(1, 2),
-            k.transpose(1, 2),
-            v.transpose(1, 2),
-            attn_mask=alibi,
-            is_causal=False,
+        out, _, _ = self.core(
+            hidden_states=x,
+            attention_mask=None,
+            past_key_values=None,
+            output_attentions=False,
+            use_cache=False,
         )
-
-        if self.using_groupnorm:
-            # Apply RMSNorm directly to each head's output
-            y = self.subln(y)
-
-        y = y.transpose(1, 2).contiguous().reshape(B, T, self.n_head * self.head_dim)
-        y = self.c_proj(y)
-        return y
+        return out
 
 
 class MLP(nn.Module):

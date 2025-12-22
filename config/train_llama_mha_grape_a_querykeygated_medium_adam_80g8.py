@@ -7,21 +7,30 @@ wandb_log = True
 wandb_project = 'nanogpt-next'
 
 # Model configs
-n_layer = 36
-n_head = 10
-n_embd = 1280
+n_layer = 24
+n_head = 8
+n_embd = 1024
 head_dim = 128
 dropout = 0.0
 bias = False
 using_groupnorm = False  # Enable Group Layernorm
 use_qk_rmsnorm = True    # Apply learnable RMSNorm to Q and K
+
+# GRAPE-A (query+key-gated additive) knobs
+# If None, ω is initialized with ALiBi-style per-head slopes.
+querykeygated_omega_init = None
+keygated_u_l2_norm = True
+keygated_u_l2_eps = 1e-6
+querygated_v_l2_norm = True
+querygated_v_l2_eps = 1e-6
+
 # Embedding init (normal std)
 embedding_init_std = 0.02
 # Hidden weights init factor (all >=2D tensors), actual std = factor / sqrt(n_embd)
 hidden_init_std_factor = 0.5
 
 # Training configs
-batch_size = 15
+batch_size = 20
 block_size = 4096
 gradient_accumulation_steps = 60 // batch_size
 max_iters = 100000
@@ -44,4 +53,5 @@ schedule = 'cosine'
 
 # System configs
 compile = True
-model_type = 'llama-mha-rope'
+model_type = 'llama-mha-grape-a-querykeygated'
+
