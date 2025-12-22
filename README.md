@@ -150,11 +150,6 @@ Evaluate the performance of the pretrained model using standardized benchmarks.
 - [EleutherAI](https://www.eleuther.ai/) for the [lm-evaluation-harness](https://github.com/EleutherAI/lm-evaluation-harness).
 - [OpenWebText](https://openwebtext2.readthedocs.io/en/latest/) team for replicating the WebText dataset.
 
-## Star History
-
-[![Star History Chart](https://api.star-history.com/svg?repos=model-architectures/GRAPE&type=Date)](https://star-history.com/#model-architectures/GRAPEA&Date)
-
-
 ## 📊 Experiments
 
 We evaluate GRAPE on language modeling tasks using the **FineWeb-Edu 100B** dataset. GRAPE-A (Additive) and GRAPE-M (Multiplicative) consistently outperform or match baselines like RoPE, ALiBi, and FoX in perplexity and downstream tasks.
