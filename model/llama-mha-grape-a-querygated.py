@@ -56,14 +56,16 @@ class QueryGatedAdditiveBias(nn.Module):
         self.v_l2_norm = bool(v_l2_norm)
         self.v_l2_eps = float(v_l2_eps)
 
+        slopes = torch.tensor(_get_alibi_slopes(n_heads), dtype=torch.float32).view(1, n_heads, 1, 1)
+        self.register_buffer("slopes", slopes, persistent=False)
+
         self.omega = nn.Parameter(torch.empty(n_heads, dtype=torch.float32))
         self.v = nn.Parameter(torch.empty(n_heads, head_dim, dtype=torch.float32))
 
         with torch.no_grad():
             if omega_init is None:
-                # Match ALiBi init: bias ≈ -dist * slope when v^T q ≈ 1.
-                slopes = torch.tensor(_get_alibi_slopes(n_heads), dtype=torch.float32)
-                self.omega.copy_(slopes)
+                # With per-head ALiBi slopes, omega=1 gives bias ≈ -dist * slope when gate ≈ 1.
+                self.omega.fill_(1.0)
             else:
                 self.omega.fill_(float(omega_init))
             if v_init_std is None:
@@ -93,11 +95,14 @@ class QueryGatedAdditiveBias(nn.Module):
         if self.v_l2_norm:
             v = F.normalize(v, p=2, dim=-1, eps=self.v_l2_eps)
 
-        # gate[b, t, h] = v_h^T q_{b,t,h,:}
-        gate = (q * v.view(1, 1, H, D).to(dtype=q.dtype, device=q.device)).sum(dim=-1)  # (B, T, H)
+        # gate[b, t, h] = softplus(v_h^T q_{b,t,h,:}) >= 0
+        v = v.to(dtype=q.dtype, device=q.device)
+        gate = (q * v.view(1, 1, H, D)).sum(dim=-1) / math.sqrt(D)  # (B, T, H)
+        gate = F.softplus(gate)
         gate = gate.transpose(1, 2).contiguous()  # (B, H, T)
 
         omega = self.omega.view(1, H, 1, 1).to(dtype=q.dtype, device=q.device)  # (1, H, 1, 1)
+        omega = omega * self.slopes.to(dtype=q.dtype, device=q.device)  # (1, H, 1, 1)
         bias = -dist.to(dtype=q.dtype) * omega * gate.view(B, H, T, 1)  # (B, H, T, T)
         return bias
 
@@ -249,7 +254,7 @@ class GPTConfig(PretrainedConfig):
     use_k_shift: bool = False
     use_v_shift: bool = False
     # GRAPE-A (query-gated additive) knobs
-    querygated_omega_init: float | None = None  # None => ALiBi-style per-head slopes
+    querygated_omega_init: float | None = None  # None => omega=1, then per-head ALiBi slopes apply
     querygated_v_init_std: float | None = None
     querygated_v_l2_norm: bool = True
     querygated_v_l2_eps: float = 1e-6

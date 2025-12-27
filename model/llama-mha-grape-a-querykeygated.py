@@ -63,14 +63,17 @@ class QueryKeyGatedAdditiveBias(nn.Module):
         self.v_l2_norm = bool(v_l2_norm)
         self.v_l2_eps = float(v_l2_eps)
 
+        slopes = torch.tensor(_get_alibi_slopes(n_heads), dtype=torch.float32).view(1, n_heads, 1, 1)
+        self.register_buffer("slopes", slopes, persistent=False)
+
         self.omega = nn.Parameter(torch.empty(n_heads, dtype=torch.float32))
         self.u = nn.Parameter(torch.empty(n_heads, head_dim, dtype=torch.float32))
         self.v = nn.Parameter(torch.empty(n_heads, head_dim, dtype=torch.float32))
 
         with torch.no_grad():
             if omega_init is None:
-                slopes = torch.tensor(_get_alibi_slopes(n_heads), dtype=torch.float32)
-                self.omega.copy_(slopes)
+                # With per-head ALiBi slopes, omega=1 gives bias ≈ -dist * slope when gate ≈ 1.
+                self.omega.fill_(1.0)
             else:
                 self.omega.fill_(float(omega_init))
 
@@ -103,6 +106,7 @@ class QueryKeyGatedAdditiveBias(nn.Module):
 
         dist = self._get_dist(T, device=q.device)  # (1, 1, T, T), float32
         omega = self.omega.view(1, H, 1, 1).to(dtype=q.dtype, device=q.device)  # (1, H, 1, 1)
+        omega = omega * self.slopes.to(dtype=q.dtype, device=q.device)  # (1, H, 1, 1)
 
         u = self.u
         if self.u_l2_norm:
@@ -111,13 +115,17 @@ class QueryKeyGatedAdditiveBias(nn.Module):
         if self.v_l2_norm:
             v = F.normalize(v, p=2, dim=-1, eps=self.v_l2_eps)
 
-        gate_k = (k * u.view(1, 1, H, D).to(dtype=q.dtype, device=q.device)).sum(dim=-1)  # (B, T, H)
-        gate_q = (q * v.view(1, 1, H, D).to(dtype=q.dtype, device=q.device)).sum(dim=-1)  # (B, T, H)
-        gate_k = gate_k.transpose(1, 2).contiguous()  # (B, H, T)
-        gate_q = gate_q.transpose(1, 2).contiguous()  # (B, H, T)
+        # diff[b, h, i, j] = (v_h^T q_{b,i,h,:}) - (u_h^T k_{b,j,h,:})
+        # gate[b, h, i, j] = softplus(diff) >= 0
+        u = u.to(dtype=q.dtype, device=q.device)
+        v = v.to(dtype=q.dtype, device=q.device)
+        gate_k = (k * u.view(1, 1, H, D)).sum(dim=-1).transpose(1, 2).contiguous() / math.sqrt(D)  # (B, H, T)
+        gate_q = (q * v.view(1, 1, H, D)).sum(dim=-1).transpose(1, 2).contiguous() / math.sqrt(D)  # (B, H, T)
 
+        diff = gate_q.view(B, H, T, 1) - gate_k.view(B, H, 1, T)  # (B, H, T, T)
+        gate = F.softplus(diff)
         dist = dist.to(dtype=q.dtype)
-        bias = dist * omega * gate_k.view(B, H, 1, T) - dist * omega * gate_q.view(B, H, T, 1)
+        bias = -dist * omega * gate
         return bias
 
 
@@ -274,7 +282,7 @@ class GPTConfig(PretrainedConfig):
     use_k_shift: bool = False
     use_v_shift: bool = False
     # GRAPE-A (query+key-gated additive) knobs
-    querykeygated_omega_init: float | None = None  # None => ALiBi-style per-head slopes
+    querykeygated_omega_init: float | None = None  # None => omega=1, then per-head ALiBi slopes apply
     keygated_u_init_std: float | None = None
     keygated_u_l2_norm: bool = True
     keygated_u_l2_eps: float = 1e-6
