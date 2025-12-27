@@ -56,14 +56,16 @@ class KeyGatedAdditiveBias(nn.Module):
         self.u_l2_norm = bool(u_l2_norm)
         self.u_l2_eps = float(u_l2_eps)
 
+        slopes = torch.tensor(_get_alibi_slopes(n_heads), dtype=torch.float32).view(1, n_heads, 1, 1)
+        self.register_buffer("slopes", slopes, persistent=False)
+
         self.omega = nn.Parameter(torch.empty(n_heads, dtype=torch.float32))
         self.u = nn.Parameter(torch.empty(n_heads, head_dim, dtype=torch.float32))
 
         with torch.no_grad():
             if omega_init is None:
-                # Match ALiBi init: bias ≈ -dist * slope when u^T k ≈ 1.
-                slopes = torch.tensor(_get_alibi_slopes(n_heads), dtype=torch.float32)
-                self.omega.copy_(-slopes)
+                # With per-head ALiBi slopes, omega=-1 gives bias ≈ -dist * slope when gate ≈ 1.
+                self.omega.fill_(-1.0)
             else:
                 self.omega.fill_(float(omega_init))
             if u_init_std is None:
@@ -93,10 +95,14 @@ class KeyGatedAdditiveBias(nn.Module):
         u = self.u
         if self.u_l2_norm:
             u = F.normalize(u, p=2, dim=-1, eps=self.u_l2_eps)
-        gate = (k * u.view(1, 1, H, D).to(dtype=k.dtype, device=k.device)).sum(dim=-1)  # (B, T, H)
+        # gate[b, t, h] = softplus(u_h^T k_{b,t,h,:}) >= 0
+        u = u.to(dtype=k.dtype, device=k.device)
+        gate = (k * u.view(1, 1, H, D)).sum(dim=-1) / math.sqrt(D)  # (B, T, H)
+        gate = F.softplus(gate)
         gate = gate.transpose(1, 2).contiguous()  # (B, H, T)
 
         omega = self.omega.view(1, H, 1, 1).to(dtype=k.dtype, device=k.device)  # (1, H, 1, 1)
+        omega = omega * self.slopes.to(dtype=k.dtype, device=k.device)  # (1, H, 1, 1)
         bias = dist.to(dtype=k.dtype) * omega * gate.view(B, H, 1, T)  # (B, H, T, T)
         return bias
 
@@ -248,7 +254,7 @@ class GPTConfig(PretrainedConfig):
     use_k_shift: bool = False
     use_v_shift: bool = False
     # Key-gated additive bias knobs
-    keygated_omega_init: float | None = None  # None => ALiBi-style per-head slopes
+    keygated_omega_init: float | None = None  # None => omega=-1, then per-head ALiBi slopes apply
     keygated_u_init_std: float | None = None
     keygated_u_l2_norm: bool = True
     keygated_u_l2_eps: float = 1e-6
