@@ -21,9 +21,9 @@ from optim_utils import get_optimizer_param_groups
 data_path = "data"
 out_dir = 'output/out'
 resume_dir = '.'
-eval_interval = 2000
+eval_interval = 1000
 log_interval = 1
-eval_iters = 200
+eval_iters = 2000
 eval_only = False  # if True, script exits right after the first eval
 always_save_checkpoint = True  # if True, always save a checkpoint after each eval
 init_from = 'scratch'  # 'scratch' or 'resume' or 'gpt2*'
@@ -34,16 +34,16 @@ wandb_project = 'nanogpt-next'
 wandb_run_name = 'gpt2'  # 'run' + str(time.time())
 # data
 dataset = 'fineweb-edu100B'
-gradient_accumulation_steps = 5  # used to simulate larger batch sizes
-batch_size = 12  # if gradient_accumulation_steps > 1, this is the micro-batch size
+gradient_accumulation_steps = 3  # used to simulate larger batch sizes
+batch_size = 20  # if gradient_accumulation_steps > 1, this is the micro-batch size
 block_size = 4096
 # model
-n_layer = 12
-n_head = 12
-head_dim = 64
+n_layer = 24
+n_head = 8
+n_embd = 1024
+head_dim = 128
 tpa_kvrank = 2
 tpa_qrank = 12
-n_embd = 768
 dropout = 0.0  # for pretraining 0 is good, for finetuning try 0.1+
 bias = False  # do we use bias inside LayerNorm and Linear layers?
 using_groupnorm = False
@@ -65,7 +65,7 @@ variant = 4
 decay_lr = True  # whether to decay the learning rate
 warmup_iters = 2000  # how many steps to warm up for
 lr_decay_iters = 600000  # should be ~= max_iters per Chinchilla
-min_lr = 6e-5  # minimum learning rate, should be ~= learning_rate/10 per Chinchilla
+min_lr = 3e-5  # minimum learning rate, should be ~= learning_rate/10 per Chinchilla
 # DDP settings
 backend = 'nccl'  # 'nccl', 'gloo', etc.
 schedule = 'cosine'

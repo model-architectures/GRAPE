@@ -34,7 +34,7 @@ gradient_accumulation_steps = 60 // batch_size
 max_iters = 100000
 lr_decay_iters = 100000
 eval_interval = 1000
-eval_iters = 200
+eval_iters = 2000
 log_interval = 10
 
 # Optimizer configs
