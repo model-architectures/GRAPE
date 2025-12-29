@@ -1,6 +1,6 @@
 # For comparison
 # LlaMA using SwiGLU, learnable RMSNorm, and a GRAPE-A query+key-gated additive bias
-# Implements Eq. (add_bias_querykeygated) in paper.tex.
+# Implements Eq. (add_bias_querykeygated).
 
 import math
 from dataclasses import dataclass
@@ -14,6 +14,11 @@ from transformers.modeling_utils import PreTrainedModel
 from .init_utils import init_llama_mha_weights
 from .kv_shift import ShiftLinear
 from .rmsnorm import RMSNorm
+
+
+def _softplus_inverse(y: float) -> float:
+    """Return x such that softplus(x) = y, for y>0."""
+    return math.log(math.expm1(float(y)))
 
 
 def _get_alibi_slopes(n_heads: int) -> list[float]:
@@ -35,11 +40,10 @@ def _get_alibi_slopes(n_heads: int) -> list[float]:
 
 class QueryKeyGatedAdditiveBias(nn.Module):
     """Add a query+key-gated relative-position bias:
-      b(i,j) = (j-i) * ω_h * (v_h^T q_i - u_h^T k_j).
+      b(i,j) = (j-i) * ω_h * (softplus(v_h^T q_i) + softplus(u_h^T k_j)).
 
     For causal attention (j <= i), with dist(i,j)=i-j>=0:
-      b(i,j) = -dist(i,j) * ω_h * (v_h^T q_i - u_h^T k_j)
-             =  dist(i,j) * ω_h * (u_h^T k_j - v_h^T q_i).
+      b(i,j) = -dist(i,j) * ω_h * (softplus(v_h^T q_i) + softplus(u_h^T k_j)).
     """
 
     def __init__(
@@ -70,12 +74,14 @@ class QueryKeyGatedAdditiveBias(nn.Module):
         self.u = nn.Parameter(torch.empty(n_heads, head_dim, dtype=torch.float32))
         self.v = nn.Parameter(torch.empty(n_heads, head_dim, dtype=torch.float32))
 
+        omega_init_value = 1.0 if omega_init is None else float(omega_init)
+        if omega_init_value < 0:
+            raise ValueError("querykeygated_omega_init must be non-negative.")
+        omega_init_value = max(omega_init_value, 1e-8)
+
         with torch.no_grad():
-            if omega_init is None:
-                # With per-head ALiBi slopes, omega=1 gives bias ≈ -dist * slope when gate ≈ 1.
-                self.omega.fill_(1.0)
-            else:
-                self.omega.fill_(float(omega_init))
+            # We parameterize omega via softplus to ensure omega_h >= 0 (paper's monotonic penalty).
+            self.omega.fill_(_softplus_inverse(omega_init_value))
 
             if u_init_std is None:
                 u_init_std = 1.0 / math.sqrt(head_dim)
@@ -105,27 +111,26 @@ class QueryKeyGatedAdditiveBias(nn.Module):
         assert D == self.head_dim, f"Expected D={self.head_dim}, got {D}"
 
         dist = self._get_dist(T, device=q.device)  # (1, 1, T, T), float32
-        omega = self.omega.view(1, H, 1, 1).to(dtype=q.dtype, device=q.device)  # (1, H, 1, 1)
-        omega = omega * self.slopes.to(dtype=q.dtype, device=q.device)  # (1, H, 1, 1)
+        omega = F.softplus(self.omega).view(1, H, 1, 1) * self.slopes  # (1, H, 1, 1), float32
 
-        u = self.u
+        u = self.u.float()
         if self.u_l2_norm:
             u = F.normalize(u, p=2, dim=-1, eps=self.u_l2_eps)
-        v = self.v
+        v = self.v.float()
         if self.v_l2_norm:
             v = F.normalize(v, p=2, dim=-1, eps=self.v_l2_eps)
 
-        # diff[b, h, i, j] = (v_h^T q_{b,i,h,:}) - (u_h^T k_{b,j,h,:})
-        # gate[b, h, i, j] = softplus(diff) >= 0
-        u = u.to(dtype=q.dtype, device=q.device)
-        v = v.to(dtype=q.dtype, device=q.device)
-        gate_k = (k * u.view(1, 1, H, D)).sum(dim=-1).transpose(1, 2).contiguous() / math.sqrt(D)  # (B, H, T)
-        gate_q = (q * v.view(1, 1, H, D)).sum(dim=-1).transpose(1, 2).contiguous() / math.sqrt(D)  # (B, H, T)
+        u = u.to(device=k.device, dtype=k.dtype)
+        v = v.to(device=q.device, dtype=q.dtype)
+        gate_k_logits = (k * u.view(1, 1, H, D)).sum(dim=-1, dtype=torch.float32) / math.sqrt(D)  # (B, T, H)
+        gate_q_logits = (q * v.view(1, 1, H, D)).sum(dim=-1, dtype=torch.float32) / math.sqrt(D)  # (B, T, H)
+        gate_k = F.softplus(gate_k_logits)  # float32
+        gate_q = F.softplus(gate_q_logits)  # float32
+        gate_k = gate_k.transpose(1, 2).contiguous()  # (B, H, T)
+        gate_q = gate_q.transpose(1, 2).contiguous()  # (B, H, T)
 
-        diff = gate_q.view(B, H, T, 1) - gate_k.view(B, H, 1, T)  # (B, H, T, T)
-        gate = F.softplus(diff)
-        dist = dist.to(dtype=q.dtype)
-        bias = -dist * omega * gate
+        rate = gate_q.view(B, H, T, 1) + gate_k.view(B, H, 1, T)  # (B, H, T, T)
+        bias = -dist * omega * rate  # float32
         return bias
 
 

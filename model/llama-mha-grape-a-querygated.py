@@ -1,6 +1,6 @@
 # For comparison
 # LlaMA using SwiGLU, learnable RMSNorm, and a GRAPE-A query-gated additive bias
-# Implements Eq. (add_bias_querygated) in paper.tex.
+# Implements the query-gated special case.
 
 import math
 from dataclasses import dataclass
@@ -14,6 +14,11 @@ from transformers.modeling_utils import PreTrainedModel
 from .init_utils import init_llama_mha_weights
 from .kv_shift import ShiftLinear
 from .rmsnorm import RMSNorm
+
+
+def _softplus_inverse(y: float) -> float:
+    """Return x such that softplus(x) = y, for y>0."""
+    return math.log(math.expm1(float(y)))
 
 
 def _get_alibi_slopes(n_heads: int) -> list[float]:
@@ -34,10 +39,11 @@ def _get_alibi_slopes(n_heads: int) -> list[float]:
 
 
 class QueryGatedAdditiveBias(nn.Module):
-    """Add a query-gated relative-position bias: b(i,j) = (j-i) * ω_h * (v_h^T q_i).
+    """Add a query-gated relative-position bias:
+      b(i,j) = (j-i) * ω_h * softplus(v_h^T q_i).
 
     For causal attention (j <= i), with dist(i,j)=i-j>=0:
-      b(i,j) = -dist(i,j) * ω_h * (v_h^T q_i).
+      b(i,j) = -dist(i,j) * ω_h * softplus(v_h^T q_i).
     """
 
     def __init__(
@@ -62,12 +68,14 @@ class QueryGatedAdditiveBias(nn.Module):
         self.omega = nn.Parameter(torch.empty(n_heads, dtype=torch.float32))
         self.v = nn.Parameter(torch.empty(n_heads, head_dim, dtype=torch.float32))
 
+        omega_init_value = 1.0 if omega_init is None else float(omega_init)
+        if omega_init_value < 0:
+            raise ValueError("querygated_omega_init must be non-negative.")
+        omega_init_value = max(omega_init_value, 1e-8)
+
         with torch.no_grad():
-            if omega_init is None:
-                # With per-head ALiBi slopes, omega=1 gives bias ≈ -dist * slope when gate ≈ 1.
-                self.omega.fill_(1.0)
-            else:
-                self.omega.fill_(float(omega_init))
+            # We parameterize omega via softplus to ensure omega_h >= 0 (paper's monotonic penalty).
+            self.omega.fill_(_softplus_inverse(omega_init_value))
             if v_init_std is None:
                 v_init_std = 1.0 / math.sqrt(head_dim)
             self.v.normal_(mean=0.0, std=float(v_init_std))
@@ -91,19 +99,19 @@ class QueryGatedAdditiveBias(nn.Module):
         assert D == self.head_dim, f"Expected D={self.head_dim}, got {D}"
 
         dist = self._get_dist(T, device=q.device)  # (1, 1, T, T), float32
-        v = self.v
+        omega = F.softplus(self.omega).view(1, H, 1, 1) * self.slopes  # (1, H, 1, 1), float32
+
+        v = self.v.float()
         if self.v_l2_norm:
             v = F.normalize(v, p=2, dim=-1, eps=self.v_l2_eps)
 
-        # gate[b, t, h] = softplus(v_h^T q_{b,t,h,:}) >= 0
-        v = v.to(dtype=q.dtype, device=q.device)
-        gate = (q * v.view(1, 1, H, D)).sum(dim=-1) / math.sqrt(D)  # (B, T, H)
-        gate = F.softplus(gate)
+        # gate[b, t, h] = softplus(v_h^T q_{b,t,h,:} / sqrt(D)) >= 0
+        v = v.to(device=q.device, dtype=q.dtype)
+        gate_logits = (q * v.view(1, 1, H, D)).sum(dim=-1, dtype=torch.float32) / math.sqrt(D)  # (B, T, H)
+        gate = F.softplus(gate_logits)  # float32
         gate = gate.transpose(1, 2).contiguous()  # (B, H, T)
 
-        omega = self.omega.view(1, H, 1, 1).to(dtype=q.dtype, device=q.device)  # (1, H, 1, 1)
-        omega = omega * self.slopes.to(dtype=q.dtype, device=q.device)  # (1, H, 1, 1)
-        bias = -dist.to(dtype=q.dtype) * omega * gate.view(B, H, T, 1)  # (B, H, T, T)
+        bias = -dist * omega * gate.view(B, H, T, 1)  # (B, H, T, T), float32
         return bias
 
 

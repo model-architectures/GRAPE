@@ -1,6 +1,6 @@
 # For comparison
 # LlaMA using SwiGLU, learnable RMSNorm, and a GRAPE-A key-gated additive bias
-# Implements Eq. (add_bias_keygated) in paper.tex.
+# Implements the key-gated special case.
 
 import math
 from dataclasses import dataclass
@@ -14,6 +14,11 @@ from transformers.modeling_utils import PreTrainedModel
 from .init_utils import init_llama_mha_weights
 from .kv_shift import ShiftLinear
 from .rmsnorm import RMSNorm
+
+
+def _softplus_inverse(y: float) -> float:
+    """Return x such that softplus(x) = y, for y>0."""
+    return math.log(math.expm1(float(y)))
 
 
 def _get_alibi_slopes(n_heads: int) -> list[float]:
@@ -34,10 +39,11 @@ def _get_alibi_slopes(n_heads: int) -> list[float]:
 
 
 class KeyGatedAdditiveBias(nn.Module):
-    """Add a key-gated relative-position bias: b(i,j) = -(j-i) * ω_h * (u_h^T k_j).
+    """Add a key-gated relative-position bias:
+      b(i,j) = (j-i) * ω_h * softplus(u_h^T k_j).
 
-    For causal attention (j <= i), this is equivalent to:
-      b(i,j) = (i-j) * ω_h * (u_h^T k_j).
+    For causal attention (j <= i), with dist(i,j)=i-j>=0:
+      b(i,j) = -dist(i,j) * ω_h * softplus(u_h^T k_j).
     """
 
     def __init__(
@@ -62,12 +68,14 @@ class KeyGatedAdditiveBias(nn.Module):
         self.omega = nn.Parameter(torch.empty(n_heads, dtype=torch.float32))
         self.u = nn.Parameter(torch.empty(n_heads, head_dim, dtype=torch.float32))
 
+        omega_init_value = 1.0 if omega_init is None else float(omega_init)
+        if omega_init_value < 0:
+            raise ValueError("keygated_omega_init must be non-negative.")
+        omega_init_value = max(omega_init_value, 1e-8)
+
         with torch.no_grad():
-            if omega_init is None:
-                # With per-head ALiBi slopes, omega=-1 gives bias ≈ -dist * slope when gate ≈ 1.
-                self.omega.fill_(-1.0)
-            else:
-                self.omega.fill_(float(omega_init))
+            # We parameterize omega via softplus to ensure omega_h >= 0 (paper's monotonic penalty).
+            self.omega.fill_(_softplus_inverse(omega_init_value))
             if u_init_std is None:
                 u_init_std = 1.0 / math.sqrt(head_dim)
             self.u.normal_(mean=0.0, std=float(u_init_std))
@@ -91,19 +99,18 @@ class KeyGatedAdditiveBias(nn.Module):
         assert D == self.head_dim, f"Expected D={self.head_dim}, got {D}"
 
         dist = self._get_dist(T, device=k.device)  # (1, 1, T, T), float32
-        # gate[b, t, h] = u_h^T k_{b,t,h,:}
-        u = self.u
+        omega = F.softplus(self.omega).view(1, H, 1, 1) * self.slopes  # (1, H, 1, 1), float32
+
+        # gate[b, t, h] = softplus(u_h^T k_{b,t,h,:} / sqrt(D)) >= 0
+        u = self.u.float()
         if self.u_l2_norm:
             u = F.normalize(u, p=2, dim=-1, eps=self.u_l2_eps)
-        # gate[b, t, h] = softplus(u_h^T k_{b,t,h,:}) >= 0
-        u = u.to(dtype=k.dtype, device=k.device)
-        gate = (k * u.view(1, 1, H, D)).sum(dim=-1) / math.sqrt(D)  # (B, T, H)
-        gate = F.softplus(gate)
+        u = u.to(device=k.device, dtype=k.dtype)
+        gate_logits = (k * u.view(1, 1, H, D)).sum(dim=-1, dtype=torch.float32) / math.sqrt(D)  # (B, T, H)
+        gate = F.softplus(gate_logits)  # float32
         gate = gate.transpose(1, 2).contiguous()  # (B, H, T)
 
-        omega = self.omega.view(1, H, 1, 1).to(dtype=k.dtype, device=k.device)  # (1, H, 1, 1)
-        omega = omega * self.slopes.to(dtype=k.dtype, device=k.device)  # (1, H, 1, 1)
-        bias = dist.to(dtype=k.dtype) * omega * gate.view(B, H, 1, T)  # (B, H, T, T)
+        bias = -dist * omega * gate.view(B, H, 1, T)  # (B, H, T, T), float32
         return bias
 
 
@@ -254,7 +261,7 @@ class GPTConfig(PretrainedConfig):
     use_k_shift: bool = False
     use_v_shift: bool = False
     # Key-gated additive bias knobs
-    keygated_omega_init: float | None = None  # None => omega=-1, then per-head ALiBi slopes apply
+    keygated_omega_init: float | None = None  # None => omega=1, then per-head ALiBi slopes apply
     keygated_u_init_std: float | None = None
     keygated_u_l2_norm: bool = True
     keygated_u_l2_eps: float = 1e-6
