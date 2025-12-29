@@ -9,6 +9,7 @@ from datetime import datetime
 
 import numpy as np
 import torch
+import torch.distributed as dist
 from torch.distributed import destroy_process_group, init_process_group
 from torch.nn.parallel import DistributedDataParallel as DDP
 from torch.optim import AdamW
@@ -253,6 +254,37 @@ def get_batch(
         x, y = x.to(device), y.to(device)
     return x, y
 
+
+train_data_rng_state_for_batch: torch.ByteTensor | None = None
+train_py_rng_state_for_batch: object | None = None
+
+
+def _data_rng_state_filename() -> str:
+    return f"data_rng_state_rank{ddp_rank}.pt" if ddp else "data_rng_state.pt"
+
+
+def _save_data_rng_state(ckpt_dir: str) -> None:
+    if data_rng_mode != 'stateful':
+        return
+    if train_data_rng_state_for_batch is None or train_py_rng_state_for_batch is None:
+        raise RuntimeError("Missing train RNG state for stateful RNG mode")
+    payload = {
+        'iter_num': iter_num,
+        'world_size': world_size,
+        'ddp_rank': ddp_rank,
+        'train_data_rng_state_for_batch': train_data_rng_state_for_batch,
+        'train_py_rng_state_for_batch': train_py_rng_state_for_batch,
+    }
+    torch.save(payload, os.path.join(ckpt_dir, _data_rng_state_filename()))
+
+
+def _get_train_batch_stateful():
+    global train_data_rng_state_for_batch, train_py_rng_state_for_batch
+    train_data_rng_state_for_batch = train_data_rng.get_state()
+    train_py_rng_state_for_batch = train_py_rng.getstate()
+    return get_batch('train', rng=train_data_rng, py_rng=train_py_rng)
+
+
 # Init these up here, can override if init_from='resume' (i.e. from a checkpoint)
 iter_num = 0
 best_val_loss = 1e9
@@ -381,6 +413,8 @@ else:
 # Now create the output directory
 if master_process:
     os.makedirs(out_dir, exist_ok=True)
+if ddp:
+    dist.barrier()
 
 # Initialize a GradScaler. If enabled=False, scaler is a no-op
 scaler = torch.cuda.amp.GradScaler(enabled=(dtype == 'float16'))
@@ -406,6 +440,22 @@ if init_from == 'resume':
     # print(optimizer.state_dict()['param_groups'])
     print(best_val_loss)
     del optimizer_state
+    if data_rng_mode == 'stateful':
+        rng_state_path = os.path.join(resume_dir, _data_rng_state_filename())
+        if os.path.exists(rng_state_path):
+            rng_state = torch.load(rng_state_path, map_location='cpu')
+            torch_state = rng_state.get('train_data_rng_state_for_batch')
+            py_state = rng_state.get('train_py_rng_state_for_batch')
+            if torch_state is None or py_state is None:
+                raise RuntimeError(f"Missing train RNG state in {rng_state_path}")
+            train_data_rng_state_for_batch = torch_state
+            train_py_rng_state_for_batch = py_state
+            train_data_rng.set_state(torch_state)
+            train_py_rng.setstate(py_state)
+        else:
+            raise FileNotFoundError(
+                f"stateful data_rng_mode requires {rng_state_path} to resume deterministically"
+            )
 # Compile the model
 if compile:
     print("compiling the model... (takes a ~minute)")
@@ -421,7 +471,8 @@ if ddp:
 @torch.no_grad()
 def estimate_loss():
     out = {}
-    model.eval()
+    eval_model = model.module if ddp else model
+    eval_model.eval()
     for split in ['train', 'val']:
         losses = torch.zeros(eval_iters)
         for k in range(eval_iters):
@@ -430,10 +481,10 @@ def estimate_loss():
             else:
                 X, Y = get_batch(split, rng=eval_data_rng, py_rng=eval_py_rng)
             with ctx:
-                logits, loss = model(X, Y)
+                logits, loss = eval_model(X, Y)
             losses[k] = loss.item()
         out[split] = losses.mean()
-    model.train()
+    eval_model.train()
     return out
 
 
@@ -488,7 +539,7 @@ if data_rng_mode == 'stateless':
     X, Y = get_batch('train', batch_id=train_batch_id)  # fetch the very first batch
 else:
     train_batch_id = None
-    X, Y = get_batch('train', rng=train_data_rng, py_rng=train_py_rng)  # fetch the very first batch
+    X, Y = _get_train_batch_stateful()  # fetch the very first batch
 t0 = time.time()
 local_iter_num = 0  # number of iterations in the lifetime of this process
 raw_model = model.module if ddp else model  # unwrap DDP container if needed
@@ -501,51 +552,70 @@ while True:
     for param_group in optimizer.param_groups:
         param_group['lr'] = lr
 
-    # Evaluate the loss on train/val sets and write checkpoints
-    if iter_num % eval_interval == 0 and master_process:
-        losses = estimate_loss()
-        print(
-            f"step {iter_num}: train loss {losses['train']:.4f}, "
-            f"val loss {losses['val']:.4f}"
-        )
-        if wandb_log:
-            wandb.log(
-                {
-                    "iter": iter_num,
-                    "train/loss": losses['train'],
-                    "val/loss": losses['val'],
-                    "lr": lr,
-                    "mfu": running_mfu * 100,  # convert to percentage
-                },
-                step=iter_num,
+    # Evaluate the loss on train/val sets and write checkpoints (keep DDP ranks in sync)
+    if iter_num % eval_interval == 0:
+        save_latest = False
+        if master_process:
+            losses = estimate_loss()
+            print(
+                f"step {iter_num}: train loss {losses['train']:.4f}, "
+                f"val loss {losses['val']:.4f}"
             )
-        if losses['val'] < best_val_loss or always_save_checkpoint:
-            best_val_loss = losses['val']
-            if iter_num > 0:
-                print(f"saving checkpoint to {out_dir}")
-                # 保存模型和配置
-                raw_model.save_pretrained(out_dir)
-                # 保存优化器状态(可选)
+            if wandb_log:
+                wandb.log(
+                    {
+                        "iter": iter_num,
+                        "train/loss": losses['train'],
+                        "val/loss": losses['val'],
+                        "lr": lr,
+                        "mfu": running_mfu * 100,  # convert to percentage
+                    },
+                    step=iter_num,
+                )
+            update_best = losses['val'] < best_val_loss or always_save_checkpoint
+            if update_best:
+                best_val_loss = losses['val']
+                if iter_num > 0:
+                    print(f"saving checkpoint to {out_dir}")
+                    raw_model.save_pretrained(out_dir)
+                    optimizer_state = {
+                        'optimizer': optimizer.state_dict(),
+                        'iter_num': iter_num,
+                        'best_val_loss': best_val_loss,
+                    }
+                    torch.save(optimizer_state, os.path.join(out_dir, 'optimizer.pt'))
+                    save_latest = True
+
+        if ddp:
+            comm_device = device if backend == 'nccl' else 'cpu'
+            save_latest_flag = torch.tensor([1 if save_latest else 0], device=comm_device)
+            dist.broadcast(save_latest_flag, src=0)
+            save_latest = bool(save_latest_flag.item())
+
+        if save_latest:
+            _save_data_rng_state(out_dir)
+            if ddp:
+                dist.barrier()
+
+        save_snapshot = iter_num % (eval_interval * 5) == 0
+        if save_snapshot:
+            checkpoint_dir = os.path.join(out_dir, f'checkpoint-{iter_num}')
+            if master_process:
+                os.makedirs(checkpoint_dir, exist_ok=True)
+                raw_model.save_pretrained(checkpoint_dir)
                 optimizer_state = {
                     'optimizer': optimizer.state_dict(),
                     'iter_num': iter_num,
                     'best_val_loss': best_val_loss,
                 }
-                torch.save(optimizer_state, os.path.join(out_dir, 'optimizer.pt'))
-                
-
-        if iter_num % (eval_interval * 5) == 0:
-            checkpoint_dir = os.path.join(out_dir, f'checkpoint-{iter_num}')
-            os.makedirs(checkpoint_dir, exist_ok=True)
-            # 保存模型和配置
-            raw_model.save_pretrained(checkpoint_dir)
-            # 保存优化器状态(可选)
-            optimizer_state = {
-                'optimizer': optimizer.state_dict(),
-                'iter_num': iter_num,
-                'best_val_loss': best_val_loss,
-            }
-            torch.save(optimizer_state, os.path.join(checkpoint_dir, 'optimizer.pt'))
+                torch.save(optimizer_state, os.path.join(checkpoint_dir, 'optimizer.pt'))
+            if ddp:
+                dist.barrier()
+            _save_data_rng_state(checkpoint_dir)
+            if ddp:
+                dist.barrier()
+        if ddp:
+            dist.barrier()
 
     if iter_num == 0 and eval_only:
         break
@@ -566,7 +636,7 @@ while True:
             train_batch_id += 1
             X, Y = get_batch('train', batch_id=train_batch_id)
         else:
-            X, Y = get_batch('train', rng=train_data_rng, py_rng=train_py_rng)
+            X, Y = _get_train_batch_stateful()
         # Backward pass, with gradient scaling if training in fp16
         scaler.scale(loss).backward()
     # Clip the gradient

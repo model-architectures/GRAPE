@@ -141,7 +141,7 @@ torchrun --standalone --nproc_per_node=8 \
     --seed=42 --data_seed=42 --eval_seed=42
 ```
 
-`data_rng_mode=stateful` is deterministic for fresh runs, but the RNG stream is not currently checkpointed so resuming will not reproduce the same data sequence.
+`data_rng_mode=stateful` is also deterministic, and checkpoints the per-rank data RNG stream for exact resume via `data_rng_state.pt` (single-process) or `data_rng_state_rank{RANK}.pt` (DDP) saved alongside `optimizer.pt`. When resuming with `data_rng_mode=stateful`, keep these files and use the same `WORLD_SIZE`/`RANK` mapping.
 
 If you need stronger end-to-end determinism beyond data order (at some performance cost), pass `--deterministic=True` to enable PyTorch deterministic kernels.
 
