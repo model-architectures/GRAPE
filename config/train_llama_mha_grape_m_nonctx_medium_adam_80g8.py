@@ -30,6 +30,7 @@ embedding_init_std = 0.02
 hidden_init_std_factor = 0.5
 
 # Training configs
+seed = 42
 batch_size = 20
 block_size = 4096
 gradient_accumulation_steps = 60 // batch_size

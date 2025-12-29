@@ -32,6 +32,7 @@ use_k_shift = True
 use_v_shift = True
 
 # Training configs
+seed = 42
 batch_size = 20
 block_size = 4096
 gradient_accumulation_steps = 60 // batch_size
@@ -56,4 +57,3 @@ schedule = 'cosine'
 # System configs
 compile = True
 model_type = 'llama-mha-grape-a-keygated'
-
