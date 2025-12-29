@@ -130,6 +130,19 @@ Pretrain the GRAPE and other models using the prepared datasets. The provided sc
 
    - `--nproc_per_node=8` specifies the number of processes (typically matching the number of GPUs).
 
+### Reproducibility (Data Order)
+
+By default the training scripts use `data_rng_mode=stateless`, which makes the *exact* per-rank training batches repeatable across runs under DDP (and when resuming from a checkpoint). For best results, fix `seed`/`data_seed`/`eval_seed`:
+
+```bash
+torchrun --standalone --nproc_per_node=8 \
+    train_adam_finewebedu.py \
+    config/train_llama_mha_rope_medium_adam_80g8.py \
+    --seed=42 --data_seed=42 --eval_seed=42
+```
+
+`data_rng_mode=stateful` is deterministic for fresh runs, but the RNG stream is not currently checkpointed so resuming will not reproduce the same data sequence.
+
 ## Evaluation
 
 Evaluate the performance of the pretrained model using standardized benchmarks.

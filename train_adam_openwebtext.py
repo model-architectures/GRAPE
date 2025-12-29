@@ -13,6 +13,7 @@ from torch.nn.parallel import DistributedDataParallel as DDP
 from torch.optim import AdamW
 
 from optim_utils import get_optimizer_param_groups
+from reproducibility import fold_in_seed
 
 # -----------------------------------------------------------------------------
 # default config values designed to train a gpt2 (124M) on Fineweb-edu 100B
@@ -38,6 +39,7 @@ block_size = 4096
 seed = 42
 data_seed = -1  # if <0, defaults to seed
 eval_seed = -1  # if <0, defaults to seed
+data_rng_mode = 'stateless'  # 'stateful' (stateful Generator) or 'stateless' (seed from (rank, step))
 # model
 n_layer = 24
 n_head = 8
@@ -131,6 +133,7 @@ else:
     # if not ddp, we are running on a single gpu, and one process
     master_process = True
     seed_offset = 0
+    ddp_rank = 0
     world_size = 1
     gradient_accumulation_steps *= 8  # simulate 8 gpus
 
@@ -164,14 +167,37 @@ val_data = np.memmap(os.path.join(data_dir, 'val.bin'), dtype=np.uint16, mode='r
 
 
 train_data_rng = torch.Generator(device='cpu')
-train_data_rng.manual_seed(data_seed + seed_offset)
+train_data_rng.manual_seed(data_seed + ddp_rank)
 eval_data_rng = torch.Generator(device='cpu')
 eval_data_rng.manual_seed(eval_seed)
+stateless_train_rng = torch.Generator(device='cpu')
+stateless_eval_rng = torch.Generator(device='cpu')
 
 
-def get_batch(split, *, rng: torch.Generator):
+def get_batch(
+    split,
+    *,
+    rng: torch.Generator | None = None,
+    batch_id: int | None = None,
+    base_seed: int | None = None,
+    rank: int | None = None,
+):
     data = train_data if split == 'train' else val_data
-    ix = torch.randint(len(data) - block_size, (batch_size,), generator=rng)
+    if data_rng_mode == 'stateful':
+        if rng is None:
+            raise ValueError("stateful data_rng_mode requires rng=")
+        batch_rng = rng
+    elif data_rng_mode == 'stateless':
+        if batch_id is None:
+            raise ValueError("stateless data_rng_mode requires batch_id=")
+        base = base_seed if base_seed is not None else (data_seed if split == 'train' else eval_seed)
+        eff_rank = rank if rank is not None else (ddp_rank if split == 'train' else 0)
+        batch_rng = stateless_train_rng if (base_seed is None and rank is None and split == 'train') else stateless_eval_rng
+        batch_rng.manual_seed(fold_in_seed(base, eff_rank, batch_id))
+    else:
+        raise ValueError(f"Unknown data_rng_mode={data_rng_mode!r}")
+
+    ix = torch.randint(len(data) - block_size, (batch_size,), generator=batch_rng)
     x = torch.stack(
         [torch.from_numpy(data[i : i + block_size].astype(np.int64)) for i in ix]
     )
@@ -358,7 +384,10 @@ def estimate_loss():
     for split in ['train', 'val']:
         losses = torch.zeros(eval_iters)
         for k in range(eval_iters):
-            X, Y = get_batch(split, rng=eval_data_rng)
+            if data_rng_mode == 'stateless':
+                X, Y = get_batch(split, batch_id=k, base_seed=eval_seed, rank=0)
+            else:
+                X, Y = get_batch(split, rng=eval_data_rng)
             with ctx:
                 logits, loss = model(X, Y)
             losses[k] = loss.item()
@@ -412,7 +441,12 @@ if wandb_log and master_process:
     wandb.init(project=wandb_project, name=wandb_run_name, config=wandb_config)
 
 # Training loop
-X, Y = get_batch('train', rng=train_data_rng)  # fetch the very first batch
+if data_rng_mode == 'stateless':
+    train_batch_id = iter_num * gradient_accumulation_steps
+    X, Y = get_batch('train', batch_id=train_batch_id)  # fetch the very first batch
+else:
+    train_batch_id = None
+    X, Y = get_batch('train', rng=train_data_rng)  # fetch the very first batch
 t0 = time.time()
 local_iter_num = 0  # number of iterations in the lifetime of this process
 raw_model = model.module if ddp else model  # unwrap DDP container if needed
@@ -485,7 +519,11 @@ while True:
         with ctx:
             logits, loss = model(X, Y)
         # Immediately async prefetch next batch while model is doing the forward pass on the GPU
-        X, Y = get_batch('train', rng=train_data_rng)
+        if data_rng_mode == 'stateless':
+            train_batch_id += 1
+            X, Y = get_batch('train', batch_id=train_batch_id)
+        else:
+            X, Y = get_batch('train', rng=train_data_rng)
         # Backward pass, with gradient scaling if training in fp16
         scaler.scale(loss).backward()
     # Clip the gradient
