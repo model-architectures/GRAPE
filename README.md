@@ -143,6 +143,8 @@ torchrun --standalone --nproc_per_node=8 \
 
 `data_rng_mode=stateful` is deterministic for fresh runs, but the RNG stream is not currently checkpointed so resuming will not reproduce the same data sequence.
 
+If you need stronger end-to-end determinism beyond data order (at some performance cost), pass `--deterministic=True` to enable PyTorch deterministic kernels.
+
 ## Evaluation
 
 Evaluate the performance of the pretrained model using standardized benchmarks.
