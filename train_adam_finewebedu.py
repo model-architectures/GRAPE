@@ -37,6 +37,10 @@ dataset = 'fineweb-edu100B'
 gradient_accumulation_steps = 3  # used to simulate larger batch sizes
 batch_size = 20  # if gradient_accumulation_steps > 1, this is the micro-batch size
 block_size = 4096
+# reproducibility
+seed = 42
+data_seed = -1  # if <0, defaults to seed
+eval_seed = -1  # if <0, defaults to seed
 # model
 n_layer = 24
 n_head = 8
@@ -83,6 +87,10 @@ config_keys = [
     if not k.startswith('_') and isinstance(v, (int, float, bool, str))
 ]
 exec(open('configurator.py').read())  # overrides from command line or config file
+if data_seed < 0:
+    data_seed = seed
+if eval_seed < 0:
+    eval_seed = seed
 config = {k: globals()[k] for k in config_keys}  # will be useful for logging
 # -----------------------------------------------------------------------------
 model_file = importlib.import_module(f'model.{model_type}')
@@ -138,7 +146,7 @@ total_tokens_B = tokens_per_iter * max_iters / (1000 ** 3)
 tokens_trained = 0  # track total tokens trained
 
 # Initialize random seed and torch settings
-torch.manual_seed(5000 + seed_offset)
+torch.manual_seed(seed + seed_offset)
 torch.backends.cuda.matmul.allow_tf32 = True  # allow tf32 on matmul
 torch.backends.cudnn.allow_tf32 = True  # allow tf32 on cudnn
 device_type = 'cuda' if 'cuda' in device else 'cpu'  # for later use in torch.autocast
@@ -166,13 +174,20 @@ train_data_list = [
     for file_name in train_file_list
 ]
 val_data = np.memmap(os.path.join(data_dir, 'fineweb_val_000000.bin'), dtype=np.uint16, mode='r')
-random.seed(5000 + seed_offset)
+train_data_rng = torch.Generator(device='cpu')
+train_data_rng.manual_seed(data_seed + seed_offset)
+train_py_rng = random.Random(data_seed + seed_offset)
+eval_data_rng = torch.Generator(device='cpu')
+eval_data_rng.manual_seed(eval_seed)
+eval_py_rng = random.Random(eval_seed)
 
 
-def get_batch(split):
-    data = random.choice(train_data_list) if split == 'train' else val_data
+def get_batch(split, *, rng: torch.Generator, py_rng: random.Random):
+    data = py_rng.choice(train_data_list) if split == 'train' else val_data
     offset = 512
-    ix = torch.randint(len(data) - block_size - offset, (batch_size,))
+    ix = torch.randint(
+        len(data) - block_size - offset, (batch_size,), generator=rng
+    )
     x = torch.stack(
         [
             torch.from_numpy(
@@ -371,7 +386,7 @@ def estimate_loss():
     for split in ['train', 'val']:
         losses = torch.zeros(eval_iters)
         for k in range(eval_iters):
-            X, Y = get_batch(split)
+            X, Y = get_batch(split, rng=eval_data_rng, py_rng=eval_py_rng)
             with ctx:
                 logits, loss = model(X, Y)
             losses[k] = loss.item()
@@ -426,7 +441,7 @@ if wandb_log and master_process:
     wandb.init(project=wandb_project, name=wandb_run_name, config=wandb_config)
 
 # Training loop
-X, Y = get_batch('train')  # fetch the very first batch
+X, Y = get_batch('train', rng=train_data_rng, py_rng=train_py_rng)  # fetch the very first batch
 t0 = time.time()
 local_iter_num = 0  # number of iterations in the lifetime of this process
 raw_model = model.module if ddp else model  # unwrap DDP container if needed
@@ -500,7 +515,7 @@ while True:
         with ctx:
             logits, loss = model(X, Y)
         # Immediately async prefetch next batch while model is doing the forward pass on the GPU
-        X, Y = get_batch('train')
+        X, Y = get_batch('train', rng=train_data_rng, py_rng=train_py_rng)
         # Backward pass, with gradient scaling if training in fp16
         scaler.scale(loss).backward()
     # Clip the gradient

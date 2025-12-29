@@ -25,6 +25,7 @@ p_tie_mode = 'none'
 p_head_dim = 8
 
 # Training configs
+seed = 42
 batch_size = 15
 block_size = 4096
 gradient_accumulation_steps = 60 // batch_size
