@@ -14,6 +14,7 @@ from torch.optim import AdamW
 
 from optim_utils import get_optimizer_param_groups
 from reproducibility import fold_in_seed
+from seed_utils import seed_everything
 
 # -----------------------------------------------------------------------------
 # default config values designed to train a gpt2 (124M) on Fineweb-edu 100B
@@ -37,6 +38,7 @@ batch_size = 20  # if gradient_accumulation_steps > 1, this is the micro-batch s
 block_size = 4096
 # reproducibility
 seed = 42
+deterministic = False  # if True, enable deterministic (may reduce throughput)
 data_seed = -1  # if <0, defaults to seed
 eval_seed = -1  # if <0, defaults to seed
 data_rng_mode = 'stateless'  # 'stateful' (stateful Generator) or 'stateless' (seed from (rank, step))
@@ -145,7 +147,7 @@ total_tokens_B = tokens_per_iter * max_iters / (1000 ** 3)
 tokens_trained = 0  # track total tokens trained
 
 # Initialize random seed and torch settings
-torch.manual_seed(seed + seed_offset)
+seed_everything(seed + seed_offset, deterministic=deterministic)
 torch.backends.cuda.matmul.allow_tf32 = True  # allow tf32 on matmul
 torch.backends.cudnn.allow_tf32 = True  # allow tf32 on cudnn
 device_type = 'cuda' if 'cuda' in device else 'cpu'  # for later use in torch.autocast
