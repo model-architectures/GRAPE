@@ -393,6 +393,25 @@ if init_from == 'resume':
         rng_state_path = os.path.join(out_dir, _data_rng_state_filename())
         if os.path.exists(rng_state_path):
             rng_state = torch.load(rng_state_path, map_location='cpu')
+            # Sanity-check that we are resuming with the intended DDP topology and step.
+            ckpt_iter = rng_state.get('iter_num')
+            ckpt_world_size = rng_state.get('world_size')
+            ckpt_rank = rng_state.get('ddp_rank')
+            if ckpt_iter is not None and int(ckpt_iter) != int(iter_num):
+                raise RuntimeError(
+                    f"RNG state iter mismatch: rng_state iter_num={ckpt_iter} "
+                    f"but optimizer iter_num={iter_num} ({rng_state_path})"
+                )
+            if ckpt_world_size is not None and int(ckpt_world_size) != int(world_size):
+                raise RuntimeError(
+                    f"RNG state WORLD_SIZE mismatch: rng_state world_size={ckpt_world_size} "
+                    f"but current WORLD_SIZE={world_size} ({rng_state_path})"
+                )
+            if ckpt_rank is not None and int(ckpt_rank) != int(ddp_rank):
+                raise RuntimeError(
+                    f"RNG state RANK mismatch: rng_state ddp_rank={ckpt_rank} "
+                    f"but current RANK={ddp_rank} ({rng_state_path})"
+                )
             state = rng_state.get('train_data_rng_state_for_batch')
             if state is None:
                 raise RuntimeError(f"Missing train_data_rng_state_for_batch in {rng_state_path}")
