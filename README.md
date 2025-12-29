@@ -167,16 +167,16 @@ Evaluate the performance of the pretrained model using standardized benchmarks.
 
 ## 📊 Experiments
 
-We evaluate GRAPE on language modeling tasks using the **FineWeb-Edu 100B** dataset. GRAPE-A (Additive) and GRAPE-M (Multiplicative) consistently outperform or match baselines like RoPE, ALiBi, and FoX in perplexity and downstream tasks.
+We evaluate GRAPE on language modeling tasks using the **FineWeb-Edu 100B** dataset (0-shot with lm-evaluation-harness; Avg. over 7 tasks: ARC-E, ARC-C, HellaSwag, OBQA, PIQA, WinoGrande, SciQ).
 
-| Method | Avg. Score (Medium Model) | Avg. Score (Large Model) |
+| Method | Avg. Score (Medium, 355M) | Avg. Score (Large, 770M) |
 | :--- | :---: | :---: |
-| RoPE | 53.44 | 56.16 |
-| ALiBi | 54.09 | 57.19 |
-| FoX | 51.96 | 55.44 |
-| **GRAPE-A** | **54.54** | **57.25** |
+| RoPE | 51.73 | 55.76 |
+| ALiBi | 52.87 | 56.44 |
+| FoX | 52.96 | 56.30 |
+| **GRAPE-AP** | **53.25** | **56.91** |
 
-*See Tables 1 and 2 in the paper for full breakdown.*
+*Numbers shown are w/o KV-shift; see Tables 1 and 2 in the paper for full breakdown (including w/ KV-shift).*
 
 ## 📝 Citation
 

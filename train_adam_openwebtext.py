@@ -48,7 +48,7 @@ n_head = 8
 n_embd = 1024
 head_dim = 128
 tpa_kvrank = 2
-tpa_qrank = 12
+tpa_qrank = 16
 dropout = 0.0  # for pretraining 0 is good, for finetuning try 0.1+
 bias = False  # do we use bias inside LayerNorm and Linear layers?
 using_groupnorm = False
@@ -303,27 +303,14 @@ if init_from == 'scratch':
     model = GPT(gptconf)
 elif init_from == 'resume':
     print(f"Resuming training from {out_dir}")
-    # Resume training from a checkpoint.
-    ckpt_path = os.path.join(out_dir, 'ckpt.pt')
-    checkpoint = torch.load(ckpt_path, map_location=device)
-    checkpoint_model_args = checkpoint['model_args']
+    # Resume training from a directory written by save_pretrained() + optimizer.pt.
+    config = GPTConfig.from_json_file(os.path.join(out_dir, 'config.json'))
+    model = GPT.from_pretrained(out_dir, config=config)
     # Force these config attributes to be equal otherwise we can't even resume training
     # The rest of the attributes (e.g. dropout) can stay as desired from command line
     for k in ['n_layer', 'n_head', 'n_embd', 'block_size', 'bias', 'vocab_size']:
-        model_args[k] = checkpoint_model_args[k]
-    # Create the model
-    gptconf = GPTConfig(**model_args)
-    model = GPT(gptconf)
-    state_dict = checkpoint['model']
-    # Fix the keys of the state dictionary :(
-    # Honestly no idea how checkpoints sometimes get this prefix, have to debug more
-    unwanted_prefix = '_orig_mod.'
-    for k, v in list(state_dict.items()):
-        if k.startswith(unwanted_prefix):
-            state_dict[k[len(unwanted_prefix):]] = state_dict.pop(k)
-    model.load_state_dict(state_dict)
-    iter_num = checkpoint['iter_num']
-    best_val_loss = checkpoint['best_val_loss']
+        model_args[k] = getattr(config, k)
+    model.transformer.wte.weight = model.lm_head.weight
 elif init_from.startswith('gpt2'):
     print(f"Initializing from OpenAI GPT-2 weights: {init_from}")
     # Initialize from OpenAI GPT-2 weights
@@ -365,9 +352,12 @@ optimizer = AdamW(
     eps=1e-8,
 )
 if init_from == 'resume':
-    optimizer.load_state_dict(checkpoint['optimizer'])
-    del state_dict
-    del checkpoint
+    optimizer_state_path = os.path.join(out_dir, 'optimizer.pt')
+    optimizer_state = torch.load(optimizer_state_path, map_location=device)
+    optimizer.load_state_dict(optimizer_state['optimizer'])
+    iter_num = optimizer_state['iter_num']
+    best_val_loss = optimizer_state['best_val_loss']
+    del optimizer_state
 # Compile the model
 if compile:
     print("compiling the model... (takes a ~minute)")
