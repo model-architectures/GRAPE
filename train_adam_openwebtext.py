@@ -2,6 +2,7 @@ import importlib
 import math
 import os
 import pickle
+import random
 import time
 from contextlib import nullcontext
 from datetime import datetime
@@ -40,6 +41,7 @@ block_size = 4096
 # reproducibility
 seed = 42
 deterministic = False  # if True, enable deterministic (may reduce throughput)
+bitwise_deterministic = False  # if True, best-effort bitwise-identical training + exact resume (forces deterministic, disables compile/TF32)
 data_seed = -1  # if <0, defaults to seed
 eval_seed = -1  # if <0, defaults to seed
 data_rng_mode = 'stateless'  # 'stateful' (stateful Generator) or 'stateless' (seed from (rank, step))
@@ -93,6 +95,12 @@ if data_seed < 0:
     data_seed = seed
 if eval_seed < 0:
     eval_seed = seed
+if bitwise_deterministic:
+    deterministic = True
+    compile = False
+# Some CUDA determinism also requires setting CUBLAS_WORKSPACE_CONFIG before CUDA context init.
+if deterministic:
+    os.environ.setdefault("CUBLAS_WORKSPACE_CONFIG", ":16:8")
 config = {k: globals()[k] for k in config_keys}  # will be useful for logging
 # -----------------------------------------------------------------------------
 model_file = importlib.import_module(f'model.{model_type}')
@@ -149,8 +157,16 @@ tokens_trained = 0  # track total tokens trained
 
 # Initialize random seed and torch settings
 seed_everything(seed + seed_offset, deterministic=deterministic)
-torch.backends.cuda.matmul.allow_tf32 = True  # allow tf32 on matmul
-torch.backends.cudnn.allow_tf32 = True  # allow tf32 on cudnn
+torch.backends.cuda.matmul.allow_tf32 = not bitwise_deterministic  # allow tf32 on matmul
+torch.backends.cudnn.allow_tf32 = not bitwise_deterministic  # allow tf32 on cudnn
+if bitwise_deterministic:
+    torch.set_float32_matmul_precision('highest')
+    # Force deterministic SDPA kernel selection (slower, but stable).
+    if torch.cuda.is_available():
+        torch.backends.cuda.enable_flash_sdp(False)
+        torch.backends.cuda.enable_mem_efficient_sdp(False)
+        torch.backends.cuda.enable_cudnn_sdp(False)
+        torch.backends.cuda.enable_math_sdp(True)
 device_type = 'cuda' if 'cuda' in device else 'cpu'  # for later use in torch.autocast
 # Note: float16 data type will automatically use a GradScaler
 ptdtype = {
@@ -248,6 +264,25 @@ def _get_train_batch_stateful():
     global train_data_rng_state_for_batch
     train_data_rng_state_for_batch = train_data_rng.get_state()
     return get_batch('train', rng=train_data_rng)
+
+def _global_rng_state_filename() -> str:
+    return f"global_rng_state_rank{ddp_rank}.pt" if ddp else "global_rng_state.pt"
+
+
+def _save_global_rng_state(ckpt_dir: str) -> None:
+    if not bitwise_deterministic:
+        return
+    payload = {
+        'iter_num': iter_num,
+        'world_size': world_size,
+        'ddp_rank': ddp_rank,
+        'python_random_state': random.getstate(),
+        'numpy_random_state': np.random.get_state(),
+        'torch_rng_state': torch.get_rng_state(),
+    }
+    if device_type == 'cuda':
+        payload['cuda_rng_state'] = torch.cuda.get_rng_state(device)
+    torch.save(payload, os.path.join(ckpt_dir, _global_rng_state_filename()))
 
 
 # Init these up here, can override if init_from='resume' (i.e. from a checkpoint)
@@ -388,6 +423,13 @@ if init_from == 'resume':
     optimizer.load_state_dict(optimizer_state['optimizer'])
     iter_num = optimizer_state['iter_num']
     best_val_loss = optimizer_state['best_val_loss']
+    if bitwise_deterministic:
+        scaler_state = optimizer_state.get('scaler')
+        if scaler_state is None:
+            raise RuntimeError(
+                f"bitwise_deterministic=True requires scaler state in {optimizer_state_path}"
+            )
+        scaler.load_state_dict(scaler_state)
     del optimizer_state
     if data_rng_mode == 'stateful':
         rng_state_path = os.path.join(out_dir, _data_rng_state_filename())
@@ -420,6 +462,40 @@ if init_from == 'resume':
         else:
             raise FileNotFoundError(
                 f"stateful data_rng_mode requires {rng_state_path} to resume deterministically"
+            )
+    if bitwise_deterministic:
+        rng_state_path = os.path.join(out_dir, _global_rng_state_filename())
+        if os.path.exists(rng_state_path):
+            rng_state = torch.load(rng_state_path, map_location='cpu')
+            ckpt_iter = rng_state.get('iter_num')
+            ckpt_world_size = rng_state.get('world_size')
+            ckpt_rank = rng_state.get('ddp_rank')
+            if ckpt_iter is not None and int(ckpt_iter) != int(iter_num):
+                raise RuntimeError(
+                    f"Global RNG state iter mismatch: rng_state iter_num={ckpt_iter} "
+                    f"but optimizer iter_num={iter_num} ({rng_state_path})"
+                )
+            if ckpt_world_size is not None and int(ckpt_world_size) != int(world_size):
+                raise RuntimeError(
+                    f"Global RNG state WORLD_SIZE mismatch: rng_state world_size={ckpt_world_size} "
+                    f"but current WORLD_SIZE={world_size} ({rng_state_path})"
+                )
+            if ckpt_rank is not None and int(ckpt_rank) != int(ddp_rank):
+                raise RuntimeError(
+                    f"Global RNG state RANK mismatch: rng_state ddp_rank={ckpt_rank} "
+                    f"but current RANK={ddp_rank} ({rng_state_path})"
+                )
+            random.setstate(rng_state['python_random_state'])
+            np.random.set_state(rng_state['numpy_random_state'])
+            torch.set_rng_state(rng_state['torch_rng_state'])
+            if device_type == 'cuda':
+                cuda_state = rng_state.get('cuda_rng_state')
+                if cuda_state is None:
+                    raise RuntimeError(f"Missing cuda_rng_state in {rng_state_path}")
+                torch.cuda.set_rng_state(cuda_state, device)
+        else:
+            raise FileNotFoundError(
+                f"bitwise_deterministic=True requires {rng_state_path} to resume deterministically"
             )
 # Compile the model
 if compile:
@@ -546,6 +622,8 @@ while True:
                         'iter_num': iter_num,
                         'best_val_loss': best_val_loss,
                     }
+                    if bitwise_deterministic:
+                        optimizer_state['scaler'] = scaler.state_dict()
                     torch.save(optimizer_state, os.path.join(out_dir, 'optimizer.pt'))
                     save_latest = True
 
@@ -557,6 +635,7 @@ while True:
 
         if save_latest:
             _save_data_rng_state(out_dir)
+            _save_global_rng_state(out_dir)
             if ddp:
                 dist.barrier()
 
@@ -571,10 +650,13 @@ while True:
                     'iter_num': iter_num,
                     'best_val_loss': best_val_loss,
                 }
+                if bitwise_deterministic:
+                    optimizer_state['scaler'] = scaler.state_dict()
                 torch.save(optimizer_state, os.path.join(checkpoint_dir, 'optimizer.pt'))
             if ddp:
                 dist.barrier()
             _save_data_rng_state(checkpoint_dir)
+            _save_global_rng_state(checkpoint_dir)
             if ddp:
                 dist.barrier()
         if ddp:

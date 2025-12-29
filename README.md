@@ -145,6 +145,8 @@ torchrun --standalone --nproc_per_node=8 \
 
 If you need stronger end-to-end determinism beyond data order (at some performance cost), pass `--deterministic=True` to enable PyTorch deterministic kernels.
 
+For best-effort *bitwise-identical* training (and exact resume), pass `--bitwise_deterministic=True`. This forces deterministic kernels, disables `torch.compile`, disables TF32, forces SDPA to use the math kernel, and checkpoints per-rank RNG + GradScaler state alongside `optimizer.pt` (requires the same PyTorch/CUDA/hardware + `WORLD_SIZE`/`RANK` mapping).
+
 ## Evaluation
 
 Evaluate the performance of the pretrained model using standardized benchmarks.
