@@ -61,7 +61,7 @@ use_v_shift = False
 # optimizer
 optimizer_name = 'adamw'
 learning_rate = 1e-3  # max learning rate
-max_iters = 100000  # total number of training iterations
+max_iters = 25000  # total number of training iterations
 weight_decay = 0.01
 beta1 = 0.9
 beta2 = 0.95
@@ -72,7 +72,7 @@ variant = 4
 # learning rate decay settings
 decay_lr = True  # whether to decay the learning rate
 warmup_iters = 2000  # how many steps to warm up for
-lr_decay_iters = 100000  # should be ~= max_iters per Chinchilla
+lr_decay_iters = 25000  # should be ~= max_iters per Chinchilla
 min_lr = 3e-5  # minimum learning rate, should be ~= learning_rate/10 per Chinchilla
 # DDP settings
 backend = 'nccl'  # 'nccl', 'gloo', etc.
