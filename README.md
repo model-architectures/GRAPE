@@ -187,7 +187,7 @@ If you find this work useful, please cite our paper:
 ```bibtex
 @article{zhang2025grape,
   title={Group Representational Position Encoding},
-  author={Zhang, Yifan and Chen, Zixiang and Liu, Yifeng and Qin, Zhen and Yuan, Huizhuo and Xu, Kangping and Yuan, Yang and Gu, Quanquan and Yao, Andrew Chi-Chih},
+  author={Zhang, Yifan and Chen, Zixiang and Liu, Yifeng and Qin, Zhen and Yuan, Huizhuo and Xu, Kangping and Gu, Quanquan and Yao, Andrew Chi-Chih},
   journal={arXiv preprint arXiv:2512.07805},
   year={2025}
 }
