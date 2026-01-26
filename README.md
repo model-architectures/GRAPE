@@ -5,13 +5,16 @@
 [![License](https://img.shields.io/badge/License-Apache_2.0-yellow.svg)](https://opensource.org/licenses/Apache-2.0)
 [![Python 3.12+](https://img.shields.io/badge/python-3.12+-blue.svg)](https://www.python.org/downloads/)
 
-Official implementation of the paper **"Group Representational Position Encoding (GRAPE)"**.
+**[ICLR 2026]** **GRAPE: Group Representational Position Encoding**.
 
 GRAPE is a unified group-theoretic framework for positional encoding that subsumes multiplicative mechanisms (like RoPE) and additive mechanisms (like ALiBi and FoX) under a single mathematical formalism. By leveraging group actions, specifically rotations in $SO(d)$ and unipotent lifts in $GL(d+k)$, GRAPE guarantees exact relative position laws and efficient streaming cacheability.
 
-Authors: [Yifan Zhang](https://yifzhang.com), [Zixiang Chen](https://sites.google.com/view/zxchen/home), [Yifeng Liu](https://lauyikfung.github.io), [Zhen Qin](https://doraemonzzz.com), [Huizhuo Yuan](https://scholar.google.com/citations?user=8foZzX4AAAAJ), [Kangping Xu](), [Quanquan Gu](https://web.cs.ucla.edu/~qgu/), [Andrew Chi-Chih Yao](https://en.wikipedia.org/wiki/Andrew_Yao) 
+Authors: [Yifan Zhang](https://yifzhang.com), [Zixiang Chen](https://sites.google.com/view/zxchen/home), [Yifeng Liu](https://lauyikfung.github.io), [Zhen Qin](https://doraemonzzz.com), [Huizhuo Yuan](https://scholar.google.com/citations?user=8foZzX4AAAAJ), [Kangping Xu](), [Yang Yuan](), [Quanquan Gu](https://web.cs.ucla.edu/~qgu/), [Andrew Chi-Chih Yao](https://en.wikipedia.org/wiki/Andrew_Yao) 
 
 [[Webpage](https://model-architectures.github.io/GRAPE)] [[Huggingface](https://huggingface.co/papers/2512.07805)] 
+
+## 🔔 NEWS
+- **[01/26/2026]** Our paper has been accepted to **ICLR 2026**! 
 
 ## 📖 Abstract
 
@@ -187,7 +190,7 @@ If you find this work useful, please cite our paper:
 ```bibtex
 @article{zhang2025grape,
   title={Group Representational Position Encoding},
-  author={Zhang, Yifan and Chen, Zixiang and Liu, Yifeng and Qin, Zhen and Yuan, Huizhuo and Xu, Kangping and Gu, Quanquan and Yao, Andrew Chi-Chih},
+  author={Zhang, Yifan and Chen, Zixiang and Liu, Yifeng and Qin, Zhen and Yuan, Huizhuo and Xu, Kangping and Yang, Yuan and Gu, Quanquan and Yao, Andrew Chi-Chih},
   journal={arXiv preprint arXiv:2512.07805},
   year={2025}
 }
