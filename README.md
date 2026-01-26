@@ -1,12 +1,12 @@
 # GRAPE: Group Representational Position Encoding
 
-[![NeurIPS 2025 Spotlight](https://img.shields.io/badge/NeurIPS2025-Published-blue)](https://arxiv.org/abs/2512.07805) 
+[![ICLR 2026](https://img.shields.io/badge/ICLR2026-Published-blue)](https://arxiv.org/abs/2512.07805) 
 [![arXiv](https://img.shields.io/badge/arXiv-2512.07805-b31b1b.svg)](https://arxiv.org/abs/2512.07805)
 [![Website](https://img.shields.io/badge/Project-Website-blue)](https://model-architectures.github.io/GRAPE) 
 [![License](https://img.shields.io/badge/License-Apache_2.0-yellow.svg)](https://opensource.org/licenses/Apache-2.0)
 [![Python 3.12+](https://img.shields.io/badge/python-3.12+-blue.svg)](https://www.python.org/downloads/)
 
-**[ICLR 2026]** **GRAPE: Group Representational Position Encoding**.
+**[ICLR 2026]** **GRAPE: Group Representational Position Encoding**
 
 GRAPE is a unified group-theoretic framework for positional encoding that subsumes multiplicative mechanisms (like RoPE) and additive mechanisms (like ALiBi and FoX) under a single mathematical formalism. By leveraging group actions, specifically rotations in $SO(d)$ and unipotent lifts in $GL(d+k)$, GRAPE guarantees exact relative position laws and efficient streaming cacheability.
 
