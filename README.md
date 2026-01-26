@@ -1,5 +1,6 @@
 # GRAPE: Group Representational Position Encoding
 
+[![NeurIPS 2025 Spotlight](https://img.shields.io/badge/NeurIPS2025-Published-blue)](https://arxiv.org/abs/2512.07805) 
 [![arXiv](https://img.shields.io/badge/arXiv-2512.07805-b31b1b.svg)](https://arxiv.org/abs/2512.07805)
 [![Website](https://img.shields.io/badge/Project-Website-blue)](https://model-architectures.github.io/GRAPE) 
 [![License](https://img.shields.io/badge/License-Apache_2.0-yellow.svg)](https://opensource.org/licenses/Apache-2.0)
