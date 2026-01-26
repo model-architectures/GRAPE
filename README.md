@@ -188,7 +188,7 @@ We evaluate GRAPE on language modeling tasks using the **FineWeb-Edu 100B** data
 If you find this work useful, please cite our paper:
 
 ```bibtex
-@article{zhang2025grape,
+@article{zhang2025group,
   title={Group Representational Position Encoding},
   author={Zhang, Yifan and Chen, Zixiang and Liu, Yifeng and Qin, Zhen and Yuan, Huizhuo and Xu, Kangping and Yang, Yuan and Gu, Quanquan and Yao, Andrew Chi-Chih},
   journal={arXiv preprint arXiv:2512.07805},
